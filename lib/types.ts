@@ -188,6 +188,14 @@ export interface KpiSummary {
   top_prefectures: RegionData[];
   top_cities: RegionData[];
 
+  // Phase 4a: 推移グラフ用内訳（当月Excelの推移データ行から取得。過去レコードは欠落許容）
+  view_reel: number;
+  view_feed: number;
+  reach_reel: number;
+  reach_feed: number;
+  engagement_reel: number;
+  engagement_feed: number;
+
   // リーチ分析用
   feed_reach_avg: number;
   reel_reach_avg: number;

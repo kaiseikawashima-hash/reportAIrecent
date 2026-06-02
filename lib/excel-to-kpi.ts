@@ -151,6 +151,14 @@ export function excelToKpiSummary(parsed: ExcelParseResult): KpiSummary {
     top_prefectures: topPrefectures,
     top_cities: topCities,
 
+    // Phase 4a: 推移グラフ用内訳（summary は推移データ当月行由来の値を保持済み）
+    view_reel: summary.view_reel,
+    view_feed: summary.view_feed,
+    reach_reel: summary.reach_reel,
+    reach_feed: summary.reach_feed,
+    engagement_reel: summary.engagement_reel,
+    engagement_feed: summary.engagement_feed,
+
     // リーチ分析用
     feed_reach_avg: feedReachAvg,
     reel_reach_avg: reelReachAvg,
