@@ -46,6 +46,21 @@ export default function EvalTopPage() {
 
       <div className="max-w-5xl mx-auto py-8 px-4 space-y-6">
         <Link
+          href="/admin/eval/report"
+          className="block bg-white rounded-xl shadow-sm border-2 border-emerald-300 p-6 hover:shadow-md hover:border-emerald-500 transition-all"
+        >
+          <div className="flex items-start justify-between mb-2">
+            <h2 className="text-base font-bold text-gray-900">
+              レポート作成（アプリ内完結版）
+            </h2>
+            <span className="text-xs text-emerald-700 font-medium">Phase 4a →</span>
+          </div>
+          <p className="text-xs text-gray-600">
+            Excelアップロード → 数値・グラフ自動描画 + AI考察（編集・保存可）
+          </p>
+        </Link>
+
+        <Link
           href="/admin/eval/generate"
           className="block bg-white rounded-xl shadow-sm border-2 border-blue-300 p-6 hover:shadow-md hover:border-blue-500 transition-all"
         >
