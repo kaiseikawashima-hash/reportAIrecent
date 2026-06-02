@@ -363,6 +363,32 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
   - **運用上の留意**: 現状ローカル環境のみ運用。`.env.local` の `APP_PASSWORD` は設定済みのため、ローカルでも削除時にパスワード入力が必要。Vercel等にデプロイする際は環境変数に `APP_PASSWORD` を登録すること（未設定だと本番では削除が401で拒否される）
   - 検証: `npx tsc --noEmit` 成功 / 3コミットを push 済み（`3371fef` → `64bff74` → `526391a`）
 
+- [x] Phase 4a: アプリ内完結レポート作成画面（基盤）（2026-06-02）
+  - **指示書**: `phase4a-instructions.md` / 設計: `report-builder-design-2026-06-02.md`
+  - **新画面**: `/admin/eval/report`（既存 `/admin/eval/generate` は無変更で温存。eval トップに導線追加）
+    - クライアント選択 → 当月Excelアップロード → 担当者メモ（任意） → 4セクション順次AI生成 → 考察編集 → 保存
+    - Notion FMT 準拠の4セクション構成。各セクションに「このセクションをコピー」ボタン（Notionコピペ運用と両立）
+  - **生成エンジン**: `POST /api/report-builder/generate-section`
+    - `eval_prompt_versions` の is_active 最新版を自動選択（follower=v1.6 / 他=v1）。プロンプト改善PDCAの成果がそのまま反映される
+    - 前セクションの生成結果を `{previous_sections}` で文脈引き継ぎ（本番 generate-report と同じ逐次方式）
+    - 参照は eval 版と同等（直前月レポート1件 + best_practices 1件、`lib/report/knowledge-context.ts`）。eval_runs には書き込まない
+  - **グラフ基盤**: recharts 導入。`components/report/charts.tsx`（折れ線/棒/ドーナツ）
+    - KPI推移表（直近1年）/ フォロワー推移 / ビュー・リーチ月次 / 性別・年齢・都道府県・市区町村ドーナツ
+    - 推移系はデータ3点未満で「データ蓄積中」表示（無理に線を引かない）。蓄積月のみを点として結び欠月はスキップ
+    - 純増は「当月フォロワー − 前月フォロワー」を表示側で明示計算（kpi_summary の follower_net_increase=0 既知課題には依存しない）
+  - **保存（UPSERT）**: `POST /api/report-builder/save`
+    - 同一 client_id + year_month の既存レコードを削除してから INSERT（ノコス2026/03 重複問題の再発防止）。既存重複データ自体の削除は別途判断のまま
+    - `kpi_summary` / `top_posts` / `excel_parsed` / `report_text`（`## セクション名` 連結＝本番と同形式）を保存。APP_PASSWORD 認証ゲート
+  - **過去月数値の手打ち入力**: `POST /api/report-builder/manual-kpi` + `ManualKpiEditor`
+    - 入力対象は推移グラフ用12項目のみ（フォロワー/ビュー・リーチ・ENG各 合計・リール・フィード/プロフアクセス/リンククリック）。デモグラは対象外
+    - 既存月は kpi_summary に入力キーのみマージ更新、新規月は report_text=null で INSERT
+    - 入力口は2か所: ①`/admin` クライアント登録/編集モーダル（折りたたみ・任意） ②レポート画面の折りたたみ欄
+  - **kpi_summary 拡張**: `view_reel/view_feed/reach_reel/reach_feed/engagement_reel/engagement_feed` キーを追加（`excelToKpiSummary` が当月Excelから自動セット。過去レコードは欠落許容）
+  - **既存無変更**: `/`・`/admin/knowledge`・`/api/knowledge` POST は無変更。`/admin` はモーダルへの追加のみ
+  - 検証: `npm run build` 成功 / lint エラー0 / 履歴API実機確認（重複月dedupe動作確認）/ 認証ゲート401確認
+  - コミット: `8618ecd`（Step C）→ `4822935`（Step A+B）→ `a572356`（Step D）
+  - **残課題（Phase 4b/4c へ）**: AI Pro/Notion風デザイン、年齢ピラミッド、投稿サムネイル、ナレッジ共有貼付欄、エクスポート、サマリーの「各指標テーブル（目標/要因/次月対策）」の編集列、日別シートパース（アカウントアクション折れ線）
+
 ## 未着手
 
 - [ ] Step 8-j: マイグレーション 006 の手動実行（川嶋）
