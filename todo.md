@@ -66,7 +66,9 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 - 手打ち入力: 推移グラフ用12項目のみ。`/admin` モーダルとレポート画面の2か所
 - **追補（同日）**: 複数月入りExcel（例: kyouwa 2025/01〜2026/06 の17ヶ月分）の過去月一括登録に対応
   - 背景: `/admin/knowledge/import` のExcelモードは当月1レコードしか保存しない（過去16ヶ月分は excel_parsed.monthly_trends に埋まったまま）→ 推移グラフに出ない
-  - 対応: `/admin/eval/report` でExcel解析後、推移データに過去月があれば「過去Nヶ月分を一括登録」ボタンを表示。`monthlyTrendsToManualEntries()`（lib/report/kpi-history.ts）で monthly_trends→12キーに変換し、既存の `/api/report-builder/manual-kpi` へ送る（当月は除外。既存月は12項目のみマージ上書きで考察は壊さない）
+  - 対応: **`/admin/knowledge/import` のExcelモード**でExcel解析後、推移データに過去月があれば「過去Nヶ月分を月別レコードとして一括登録」ボタン（確認表つき）を表示。`monthlyTrendsToManualEntries()`（lib/report/kpi-history.ts）で monthly_trends→12キーに変換し、`/api/report-builder/manual-kpi` へ送る（当月は除外＝下のフォームから考察つきで登録。既存月は12項目のみマージ上書きで考察・デモグラは壊さない）
+  - 経緯: 最初は `/admin/eval/report` に実装したが、「過去月一括投入は初期設定の作業 → 入口は import 画面」という運用判断で移し替え（レポート画面は毎月の当月Excel運用専用に保つ）
+  - **役割分担の最終形**: import画面 = 初期設定（考察つき過去レポート + 複数月数値の一括投入）/ レポート画面 = 毎月の運用（当月Excelのみ。過去分は投入済み前提で推移グラフに反映）
 - コミット: `8618ecd` → `4822935` → `a572356` → `2151bee`（**未push**）
 
 ### 既知の運用課題（次セッション以降で対応想定）

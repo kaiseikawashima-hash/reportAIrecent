@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { Client, ExcelParseResult, KpiSummary } from "@/lib/types";
 import { excelToKpiSummary } from "@/lib/excel-to-kpi";
+import { monthlyTrendsToManualEntries } from "@/lib/report/kpi-history";
+import { authHeaders, clearAppPassword } from "@/lib/client-auth";
 
 interface FmtVersionRow {
   id: string;
@@ -55,6 +57,11 @@ export default function KnowledgeImportPage() {
   const [excelLoading, setExcelLoading] = useState(false);
   const [excelError, setExcelError] = useState<string | null>(null);
 
+  // Phase 4a: 複数月入りExcel（推移データ）からの過去月一括登録
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
   useEffect(() => {
     (async () => {
       const [clientsRes, fmtRes] = await Promise.all([
@@ -72,6 +79,8 @@ export default function KnowledgeImportPage() {
 
   // Excel ファイル選択時にパース
   useEffect(() => {
+    setBulkMessage(null);
+    setBulkError(null);
     if (!excelFile) {
       setExcelData(null);
       setExcelKpi(null);
@@ -117,8 +126,61 @@ export default function KnowledgeImportPage() {
   function handleModeChange(next: ImportMode) {
     setMode(next);
     setMessage(null);
+    setBulkMessage(null);
+    setBulkError(null);
     if (next === "manual") {
       setExcelFile(null);
+    }
+  }
+
+  // Excel の推移データに含まれる過去月（当月 = target_month を除く）
+  // 当月はフォームからの「考察つき正解レポート」登録で完全な kpi_summary が入る
+  const pastTrendEntries = useMemo(
+    () =>
+      excelData
+        ? monthlyTrendsToManualEntries(excelData.monthly_trends, excelData.target_month)
+        : [],
+    [excelData]
+  );
+
+  // ------------------------------------------
+  // 過去月の一括登録（monthly_trends → 月別 kpi_summary レコード）
+  // 既存月は推移用12項目のみマージ上書き（考察・デモグラは保持）、
+  // 新規月は report_text=null で作成（manual-kpi API 側で UPSERT 相当）
+  // ------------------------------------------
+
+  async function handleBulkImport() {
+    if (bulkSaving || pastTrendEntries.length === 0) return;
+    if (!clientId) {
+      setBulkError("クライアントを選択してください");
+      return;
+    }
+    setBulkError(null);
+    setBulkMessage(null);
+    setBulkSaving(true);
+    try {
+      const res = await fetch("/api/report-builder/manual-kpi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ client_id: clientId, entries: pastTrendEntries }),
+      });
+      if (!res.ok) {
+        if (res.status === 401) clearAppPassword();
+        const body = await res.json().catch(() => ({ error: "一括登録に失敗しました" }));
+        throw new Error(body.error ?? "一括登録に失敗しました");
+      }
+      const data = await res.json();
+      const updated = (data.results ?? []).filter(
+        (r: { action: string }) => r.action === "updated"
+      ).length;
+      const created = (data.results ?? []).filter(
+        (r: { action: string }) => r.action === "created"
+      ).length;
+      setBulkMessage(`過去月を一括登録しました（新規${created}件 / 更新${updated}件）`);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "一括登録中にエラーが発生しました");
+    } finally {
+      setBulkSaving(false);
     }
   }
 
@@ -311,6 +373,93 @@ export default function KnowledgeImportPage() {
                 )}
                 {excelData && excelKpi && (
                   <ExcelPreview data={excelData} kpi={excelKpi} />
+                )}
+
+                {/* 複数月入りExcel: 過去月の一括登録（初期設定用） */}
+                {excelData && !excelLoading && pastTrendEntries.length > 0 && (
+                  <div className="mt-3 border border-blue-200 rounded-lg bg-blue-50/50 p-3 space-y-2">
+                    <p className="text-xs text-blue-900 font-medium">
+                      📊 推移データに過去{pastTrendEntries.length}ヶ月分（
+                      {pastTrendEntries[0].year_month}〜
+                      {pastTrendEntries[pastTrendEntries.length - 1].year_month}
+                      ）の数値が含まれています
+                    </p>
+                    <p className="text-[11px] text-blue-800">
+                      一括登録すると月別レコードとして保存され、レポート画面のKPI推移表・推移グラフに反映されます。
+                      既に存在する月は推移用12項目だけが上書きされます（考察テキスト・デモグラフィックは変更されません）。
+                      当月（{excelData.target_month}）は下のフォームから考察つきで登録してください
+                    </p>
+                    <details>
+                      <summary className="text-[11px] text-blue-800 cursor-pointer hover:underline">
+                        登録される内容を確認する
+                      </summary>
+                      <div className="mt-1 overflow-x-auto bg-white border rounded">
+                        <table className="text-[11px] w-full whitespace-nowrap">
+                          <thead>
+                            <tr className="border-b bg-gray-50 text-gray-600">
+                              <th className="text-left py-1 px-2 font-medium">年月</th>
+                              <th className="text-right py-1 px-2 font-medium">フォロワー</th>
+                              <th className="text-right py-1 px-2 font-medium">ビュー</th>
+                              <th className="text-right py-1 px-2 font-medium">リーチ</th>
+                              <th className="text-right py-1 px-2 font-medium">ENG</th>
+                              <th className="text-right py-1 px-2 font-medium">プロフアクセス</th>
+                              <th className="text-right py-1 px-2 font-medium">リンククリック</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pastTrendEntries.map((entry) => (
+                              <tr key={entry.year_month} className="border-b last:border-b-0">
+                                <td className="py-1 px-2">{entry.year_month}</td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.follower ?? 0).toLocaleString()}
+                                </td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.view ?? 0).toLocaleString()}
+                                </td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.reach ?? 0).toLocaleString()}
+                                </td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.engagement ?? 0).toLocaleString()}
+                                </td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.profile_access ?? 0).toLocaleString()}
+                                </td>
+                                <td className="py-1 px-2 text-right">
+                                  {(entry.values.link_clicks ?? 0).toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={handleBulkImport}
+                        disabled={bulkSaving || !clientId}
+                        className={`text-xs px-3 py-1.5 rounded-lg font-medium ${
+                          !bulkSaving && clientId
+                            ? "bg-blue-600 text-white hover:bg-blue-700"
+                            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                        }`}
+                      >
+                        {bulkSaving
+                          ? "登録中..."
+                          : `過去${pastTrendEntries.length}ヶ月分を月別レコードとして一括登録`}
+                      </button>
+                      {!clientId && (
+                        <p className="text-[11px] text-amber-700">
+                          クライアントを選択してください
+                        </p>
+                      )}
+                      {bulkMessage && (
+                        <p className="text-xs text-emerald-700">✅ {bulkMessage}</p>
+                      )}
+                      {bulkError && <p className="text-xs text-red-600">⚠ {bulkError}</p>}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
