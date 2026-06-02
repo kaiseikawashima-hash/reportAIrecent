@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
 
 // ==========================================
 // DELETE: ナレッジレコードを物理削除
 // best_practices は ON DELETE CASCADE で連動削除される
+// 不可逆な破壊的操作のため、サーバー側で APP_PASSWORD を検証する
 // ==========================================
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  if (!isAuthorized(request)) {
+    return unauthorizedResponse();
+  }
+
   const { id } = await context.params;
 
   if (!id) {

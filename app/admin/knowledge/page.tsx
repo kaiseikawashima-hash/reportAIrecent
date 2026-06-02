@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { BestPractice, Client, KnowledgeBase } from "@/lib/types";
+import { authHeaders, clearAppPassword } from "@/lib/client-auth";
 
 type DeleteTarget = {
   id: string;
@@ -85,8 +86,12 @@ export default function KnowledgePage() {
     try {
       const res = await fetch(
         `/api/knowledge/${encodeURIComponent(deleteTarget.id)}`,
-        { method: "DELETE" }
+        { method: "DELETE", headers: authHeaders() }
       );
+      if (res.status === 401) {
+        clearAppPassword();
+        throw new Error("パスワードが違います。もう一度お試しください");
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: "削除に失敗しました" }));
         throw new Error(body.error ?? "削除に失敗しました");
