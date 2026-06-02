@@ -19,6 +19,11 @@ import SummarySection from "@/components/report/SummarySection";
 import FollowerSection from "@/components/report/FollowerSection";
 import ReachSection from "@/components/report/ReachSection";
 import AccountSection from "@/components/report/AccountSection";
+import ManualKpiEditor, {
+  manualRowsToEntries,
+  type ManualKpiRow,
+} from "@/components/report/ManualKpiEditor";
+import { authHeaders, clearAppPassword } from "@/lib/client-auth";
 
 const SECTION_ORDER: EvalSection[] = ["summary", "follower", "reach", "account"];
 
@@ -70,6 +75,11 @@ export default function ReportBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const [manualRows, setManualRows] = useState<ManualKpiRow[]>([]);
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualMessage, setManualMessage] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   // ------------------------------------------
   // 初期ロード・履歴取得
@@ -267,7 +277,7 @@ export default function ReportBuilderPage() {
 
       const res = await fetch("/api/report-builder/save", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           client_id: clientId,
           year_month: targetMonthSlash,
@@ -284,6 +294,7 @@ export default function ReportBuilderPage() {
         }),
       });
       if (!res.ok) {
+        if (res.status === 401) clearAppPassword();
         const body = await res.json().catch(() => ({ error: "保存に失敗しました" }));
         throw new Error(body.error ?? "保存に失敗しました");
       }
@@ -298,6 +309,54 @@ export default function ReportBuilderPage() {
       setSaveError(err instanceof Error ? err.message : "保存中にエラーが発生しました");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ------------------------------------------
+  // 過去月数値の手打ち保存（kpi_summary へマージ → 推移グラフに反映）
+  // ------------------------------------------
+
+  async function handleManualSave() {
+    if (manualSaving || !clientId) return;
+    setManualError(null);
+    setManualMessage(null);
+
+    const converted = manualRowsToEntries(manualRows);
+    if ("error" in converted) {
+      setManualError(converted.error);
+      return;
+    }
+    if (converted.entries.length === 0) {
+      setManualError("保存する数値がありません");
+      return;
+    }
+
+    setManualSaving(true);
+    try {
+      const res = await fetch("/api/report-builder/manual-kpi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ client_id: clientId, entries: converted.entries }),
+      });
+      if (!res.ok) {
+        if (res.status === 401) clearAppPassword();
+        const body = await res.json().catch(() => ({ error: "保存に失敗しました" }));
+        throw new Error(body.error ?? "保存に失敗しました");
+      }
+      const data = await res.json();
+      const updated = (data.results ?? []).filter(
+        (r: { action: string }) => r.action === "updated"
+      ).length;
+      const created = (data.results ?? []).filter(
+        (r: { action: string }) => r.action === "created"
+      ).length;
+      setManualMessage(`保存しました（新規${created}件 / 更新${updated}件）`);
+      setManualRows([]);
+      await fetchHistory(clientId);
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : "保存中にエラーが発生しました");
+    } finally {
+      setManualSaving(false);
     }
   }
 
@@ -505,6 +564,46 @@ export default function ReportBuilderPage() {
               {saveError && (
                 <p className="text-xs text-red-600 mt-2">⚠ {saveError}</p>
               )}
+            </section>
+
+            {/* 過去月数値の手打ち入力 */}
+            <section className="bg-white rounded-xl shadow-sm border">
+              <details>
+                <summary className="px-6 py-4 text-sm font-bold text-gray-900 cursor-pointer hover:bg-gray-50 rounded-xl">
+                  過去月数値の手打ち入力（推移グラフ用・任意）
+                </summary>
+                <div className="px-6 pb-6 space-y-3">
+                  <p className="text-xs text-gray-500">
+                    knowledge_base に無い過去月の数値や、当月数値の修正を入力できます。
+                    入力した項目だけが kpi_summary にマージ保存され、推移グラフ・KPI推移表に反映されます
+                  </p>
+                  <ManualKpiEditor
+                    rows={manualRows}
+                    onChange={setManualRows}
+                    disabled={manualSaving}
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleManualSave}
+                      disabled={manualSaving || manualRows.length === 0}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                        !manualSaving && manualRows.length > 0
+                          ? "bg-blue-600 text-white hover:bg-blue-700"
+                          : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      }`}
+                    >
+                      {manualSaving ? "保存中..." : "数値を保存"}
+                    </button>
+                    {manualMessage && (
+                      <p className="text-xs text-emerald-700">✅ {manualMessage}</p>
+                    )}
+                    {manualError && (
+                      <p className="text-xs text-red-600">⚠ {manualError}</p>
+                    )}
+                  </div>
+                </div>
+              </details>
             </section>
           </>
         )}

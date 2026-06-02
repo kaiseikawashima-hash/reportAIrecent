@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Client, ClientPlan, MasterFmt } from "@/lib/types";
+import ManualKpiEditor, {
+  manualRowsToEntries,
+  type ManualKpiRow,
+} from "@/components/report/ManualKpiEditor";
+import { authHeaders, clearAppPassword } from "@/lib/client-auth";
 
 interface ClientForm {
   name: string;
@@ -32,6 +37,10 @@ export default function AdminPage() {
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
+  // Phase 4a: 過去月数値の初期入力（推移グラフ用・任意）
+  const [manualRows, setManualRows] = useState<ManualKpiRow[]>([]);
+  const [manualError, setManualError] = useState<string | null>(null);
+
   const [fmt, setFmt] = useState<MasterFmt | null>(null);
   const [fmtContent, setFmtContent] = useState("");
   const [fmtSaving, setFmtSaving] = useState(false);
@@ -60,6 +69,8 @@ export default function AdminPage() {
   function openCreate() {
     setForm(EMPTY_FORM);
     setGenerateError(null);
+    setManualRows([]);
+    setManualError(null);
     setModal({ kind: "create" });
   }
 
@@ -73,6 +84,8 @@ export default function AdminPage() {
       plan: client.plan ?? "advance",
     });
     setGenerateError(null);
+    setManualRows([]);
+    setManualError(null);
     setModal({ kind: "edit", id: client.id });
   }
 
@@ -81,10 +94,35 @@ export default function AdminPage() {
     setModal(null);
   }
 
+  /**
+   * 過去月数値を /api/report-builder/manual-kpi へ保存する。
+   * 入力が無ければ何もしない。失敗時はエラーメッセージを返す。
+   */
+  async function saveManualKpi(clientId: string): Promise<string | null> {
+    const converted = manualRowsToEntries(manualRows);
+    if ("error" in converted) return converted.error;
+    if (converted.entries.length === 0) return null;
+
+    const res = await fetch("/api/report-builder/manual-kpi", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ client_id: clientId, entries: converted.entries }),
+    });
+    if (!res.ok) {
+      if (res.status === 401) clearAppPassword();
+      const body = await res.json().catch(() => ({}));
+      return body.error ?? "過去月数値の保存に失敗しました";
+    }
+    return null;
+  }
+
   async function handleSave() {
     if (!modal || !form.name.trim()) return;
     setSaving(true);
+    setManualError(null);
     try {
+      let savedClientId: string | null = null;
+
       if (modal.kind === "create") {
         const res = await fetch("/api/clients", {
           method: "POST",
@@ -92,8 +130,8 @@ export default function AdminPage() {
           body: JSON.stringify(form),
         });
         if (res.ok) {
-          await fetchClients();
-          setModal(null);
+          const saved = await res.json();
+          savedClientId = typeof saved?.id === "string" ? saved.id : null;
         }
       } else {
         const res = await fetch("/api/clients", {
@@ -102,10 +140,25 @@ export default function AdminPage() {
           body: JSON.stringify({ id: modal.id, ...form }),
         });
         if (res.ok) {
-          await fetchClients();
-          setModal(null);
+          savedClientId = modal.id;
         }
       }
+
+      if (!savedClientId) return;
+
+      // クライアント保存後に過去月数値を保存（失敗してもクライアント自体は保存済み）
+      const manualErr = await saveManualKpi(savedClientId);
+      if (manualErr) {
+        setManualError(`クライアントは保存されましたが、過去月数値の保存に失敗: ${manualErr}`);
+        await fetchClients();
+        // 再保存でクライアントが重複しないよう編集モードへ切り替えて開いたままにする
+        setModal({ kind: "edit", id: savedClientId });
+        return;
+      }
+
+      await fetchClients();
+      setManualRows([]);
+      setModal(null);
     } finally {
       setSaving(false);
     }
@@ -238,6 +291,9 @@ export default function AdminPage() {
           saving={saving}
           generating={generating}
           generateError={generateError}
+          manualRows={manualRows}
+          onManualRowsChange={setManualRows}
+          manualError={manualError}
           onClose={closeModal}
           onSave={handleSave}
           onGenerate={handleGenerateAutoMemo}
@@ -307,6 +363,9 @@ interface ModalProps {
   saving: boolean;
   generating: boolean;
   generateError: string | null;
+  manualRows: ManualKpiRow[];
+  onManualRowsChange: (rows: ManualKpiRow[]) => void;
+  manualError: string | null;
   onClose: () => void;
   onSave: () => void;
   onGenerate: () => void;
@@ -319,6 +378,9 @@ function ClientFormModal({
   saving,
   generating,
   generateError,
+  manualRows,
+  onManualRowsChange,
+  manualError,
   onClose,
   onSave,
   onGenerate,
@@ -448,6 +510,27 @@ function ClientFormModal({
               <p className="mt-1 text-xs text-amber-600">⚠ {generateError}</p>
             )}
           </div>
+
+          {/* Phase 4a: 過去月数値の初期入力（推移グラフ用・任意） */}
+          <details className="border rounded-lg">
+            <summary className="px-3 py-2 text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg">
+              過去月数値の初期入力（推移グラフ用・任意）
+            </summary>
+            <div className="px-3 pb-3 space-y-2">
+              <p className="text-[11px] text-gray-500">
+                フォロワー・ビュー・リーチ等の過去月数値を入力すると、レポート画面の推移グラフに反映されます。
+                保存ボタンでクライアントと一緒に保存されます
+              </p>
+              <ManualKpiEditor
+                rows={manualRows}
+                onChange={onManualRowsChange}
+                disabled={saving || generating}
+              />
+            </div>
+          </details>
+          {manualError && (
+            <p className="text-xs text-red-600">⚠ {manualError}</p>
+          )}
         </div>
 
         <div className="px-6 py-4 border-t flex items-center justify-end gap-2">
