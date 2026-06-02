@@ -2,19 +2,26 @@
 
 ## 🔜 次回の再開ポイント（2026-06-02 時点）
 
-**現在地**: Phase 4a（アプリ内完結レポート作成画面の基盤）実装完了・ビルド/型/lint 検証済み。**川嶋さんの実機動作確認がまだ**。
+**現在地**: Phase 4a（アプリ内完結レポート作成画面の基盤）実装完了 + 追補2件（複数月Excelの過去月一括登録 → import画面へ移設）。ビルド/型/lint 検証済み。**川嶋さんの実機動作確認がまだ**。
 
-次回はここから:
-1. **Phase 4a の実機動作確認**（`npm run dev` → http://localhost:3000/admin/eval/report ）
-   - ノコス or キョウワホームを選択 → 過去月のKPI推移表が表示されるか
+**画面の役割分担（確定）**:
+- `/admin/knowledge/import` = **初期設定**（考察つき過去レポート投入 + 複数月Excelの過去月数値一括登録）
+- `/admin/eval/report` = **毎月の運用**（当月Excelのみ。過去分は投入済み前提で推移グラフに自動反映）
+
+次回はここから（`npm run dev` で確認）:
+1. **初期設定の確認**（ http://localhost:3000/admin/knowledge/import → Excelモード）
+   - キョウワホームを選択 → 17ヶ月Excel（`analytics_export_kyouwa.home_202501_202606.xlsx`）をアップロード
+   - 青パネル「📊 推移データに過去16ヶ月分…」→ 確認表で数値チェック →「一括登録」
+   - APP_PASSWORD の入力プロンプトが出る（`.env.local` の値を入力）
+2. **毎月運用の確認**（ http://localhost:3000/admin/eval/report ）
+   - キョウワホームを選択 → ①で投入した過去月がKPI推移表・推移グラフ（折れ線）に出るか
    - 当月Excelアップロード → ドーナツ/投稿一覧の表示 → 「考察を生成」（4セクション順次生成）
-   - 考察を編集 → 「レポートを保存」（**APP_PASSWORD の入力プロンプトが出る**。`.env.local` の値を入力）
-   - 保存後にKPI推移表へ当月が反映されるか / 同月再保存で重複しないか
+   - 考察を編集 → 「レポートを保存」 → 推移表へ当月反映 / 同月再保存で重複しないか
    - 過去月数値の手打ち入力（レポート画面下部の折りたたみ + `/admin` クライアントモーダル内）
-2. **GitHub へ push**（Phase 4a の5コミットが未push: `8618ecd`〜）→「pushして」でOK
-3. 動作確認で問題なければ **Phase 4b**（AI Pro/Notion風デザイン・年齢ピラミッド等）または運用準備（Step 9 デプロイ / Step 10 過去データ投入）へ
+3. **GitHub へ push**（Phase 4a 一式 `8618ecd`〜`d227c32` + docs が未push）→「pushして」でOK
+4. 動作確認で問題なければ **Phase 4b**（AI Pro/Notion風デザイン・年齢ピラミッド等）または運用準備（Step 9 デプロイ / Step 10 過去データ投入）へ
 
-実装内容の詳細は「完了済み > Phase 4a」の項を参照。設計判断（新規ルート採用 / is_activeプロンプト自動選択）もそこに記載。
+実装内容の詳細は「完了済み > Phase 4a」と「リリースノート > Phase 4a（追補含む）」を参照。設計判断（新規ルート採用 / is_activeプロンプト自動選択 / 一括登録のimport画面移設）もそこに記載。
 
 ---
 
@@ -419,14 +426,16 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
   - **kpi_summary 拡張**: `view_reel/view_feed/reach_reel/reach_feed/engagement_reel/engagement_feed` キーを追加（`excelToKpiSummary` が当月Excelから自動セット。過去レコードは欠落許容）
   - **既存無変更**: `/`・`/admin/knowledge`・`/api/knowledge` POST は無変更。`/admin` はモーダルへの追加のみ
   - 検証: `npm run build` 成功 / lint エラー0 / 履歴API実機確認（重複月dedupe動作確認）/ 認証ゲート401確認
-  - コミット: `8618ecd`（Step C）→ `4822935`（Step A+B）→ `a572356`（Step D）
+  - **追補1: 複数月Excelの過去月一括登録**（`monthlyTrendsToManualEntries()` + 確認表つき一括登録ボタン。当月除外・既存月は12項目のみマージ）
+  - **追補2: 一括登録ボタンを import 画面へ移設**（過去月一括投入は初期設定作業のため。レポート画面は当月Excel専用のシンプルな状態に復帰）
+  - コミット: `8618ecd`（Step C）→ `4822935`（Step A+B）→ `a572356`（Step D）→ `9d015c3`（一括登録）→ `d227c32`（import画面へ移設）
   - **残課題（Phase 4b/4c へ）**: AI Pro/Notion風デザイン、年齢ピラミッド、投稿サムネイル、ナレッジ共有貼付欄、エクスポート、サマリーの「各指標テーブル（目標/要因/次月対策）」の編集列、日別シートパース（アカウントアクション折れ線）
 
 ## 未着手
 
 - [ ] Phase 4a-検収: 実機動作確認 + GitHub push（川嶋）
-  - 手順は冒頭「🔜 次回の再開ポイント」参照
-  - 確認OK後に `git push` で `origin/main` へ反映（5コミット分）
+  - 手順は冒頭「🔜 次回の再開ポイント」参照（①import画面で過去月一括登録 → ②レポート画面で推移グラフ確認・生成・保存）
+  - 確認OK後に `git push` で `origin/main` へ反映（`8618ecd`〜`d227c32` + docs 一式）
 - [ ] Phase 4b: デザイン作り込み + 特殊グラフ（7月予定）
   - AI Pro/Notion風の見た目調整
   - 男女別年齢ピラミッド
