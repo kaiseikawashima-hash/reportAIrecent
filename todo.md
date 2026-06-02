@@ -1,5 +1,44 @@
 # SNSレポート生成アプリ - 進捗チェックリスト
 
+## 直近のリリースノート（2026-05-21 〜 2026-05-22）
+
+### Phase 3.6 — 検証側の参照ロジック「過去レポ1件＋表現ナレッジ1件」化
+従来「同社過去6件＋他社ランダム4件 = 計10件」だった検証側の参照を、トークン削減目的で「直前月の正解レポート1件＋`best_practices` 1件 = 計2件」に変更。本番 `/api/generate-report` は無変更。
+- 新規画面: `/admin/knowledge/import`（過去レポート手動投入）+ KPI任意入力（5項目）→ Step 8-m
+- API: `/api/master-fmt/list`（FMTバージョン一覧）+ `/api/knowledge` POST が `kpi_summary={}` を許容
+- 検証API: `/api/eval/generate-section` が前月 `knowledge_base` + 最新 `best_practices`（→紐づく `knowledge_base.report_text`）を取得。参照不能時は `actual_references.reference_status` に `referenced:false` + `reason` を記録 → Step 8-n
+- 検証画面: 結果上部に `ReferenceNotice`（参照状況バナー）+ 右パネルを「直前月レポート / 表現ナレッジ」2ブロック化
+
+### Phase 3.6.1 — ナレッジDB削除機能
+`knowledge_base` の物理削除エンドポイントと、`/admin/knowledge` の各カードに赤色ゴミ箱アイコン + 確認モーダル + トーストを追加。`best_practices` は ON DELETE CASCADE 設定済みのため自動連動削除（DBレベル確認済み）。→ Step 8-o
+- 新規API: `DELETE /api/knowledge/[id]`（404/500 ハンドリング）
+- 既存 GET/POST、本番自動保存フローは無変更
+
+### Phase 3.7 — DiffCalcAgent を knowledge_base 参照型に + kpi_summary 拡充
+Excel に当月分のみが入る運用に変わったため、前月比は前月レコードの `kpi_summary` から取得する方式に変更。同時に各セクション考察用の詳細データを保存。→ Step 8-p
+- マイグレーション 007: `knowledge_base.excel_parsed jsonb DEFAULT '{}'`（Supabase 適用済み）
+- 新ヘルパー: `lib/excel-to-kpi.ts`（性別比 / 年齢分布 7バケット / 都道府県・市区町村 TOP10 / フィード・リール別 reach/view 平均・本数 / ENG率 / コメント・プロフィールアクセス・リンククリック）
+- `calc-diff`: `client_id + target_month_override` を受け取り、前月レコードなし → `N/A` + "データ不足（前月レコードなし）"、部分入力 → `"データ不足（前月の{key}未保存）"` のフォールバック付き
+- 呼び出し側: `ReportGenerator.tsx` と `/api/eval/generate-section` から `client_id` を渡すよう更新
+- 本番自動保存: `excelToKpiSummary(excelData)` + `excel_parsed: excelData` を送信
+- 手動投入画面に「Excelアップロードモード」追加（パース確認表 + target_month / kpi_summary / excel_parsed 自動セット）
+
+### Phase 3.7.1 — Excel パーサを Instagram AI Pro 固定構造に刷新
+3.7 完了後、実Excelで `summary.view=0 / profile_access=0 / link_clicks=0 / feed_posts=[] / top_cities=[]` 等の致命的欠落が判明。キーワード検索を捨てて、シート別の固定カラム位置読みに全面リファクタ。→ Step 8-q
+- パーサ完全書き直し: 全シートで固定 index 読み、`extractTitle` を ━ 区切り判定でボイラープレート（『残し続ける1ページ』など）混入を回避
+- `MonthlyTrend` を14列対応に拡張（`reach_reel/feed`, `engagement_reel/feed`, `profile_access`, `link_clicks` 追加）
+- `ExcelSummary` も推移データ当月行から内訳補完（`view_reel/feed`, `reach_reel/feed`, `engagement_reel/feed`, `profile_access`, `link_clicks`）
+- `region.ratio` の 10倍誤補正バグを修正（Excel値はすでに％単位 → 文字列に "%" を付けるだけ）
+- 検証: サンプルExcel（NOCOSU 2026/03）で `npx next start` 実機テスト 21/21 項目期待値一致
+
+### 既知の運用課題（次セッション以降で対応想定）
+- `best_practices` レコードは現在 0 件 → 検証側で常に「⚠️ 表現ナレッジを参照していません」が表示される。`/admin/knowledge` から既存ナレッジを★登録すれば次回から拾われる
+- `knowledge_base` の 家計画 2026/03 は Phase 3.5 のパーサバグ由来で `view=0` の壊れデータ。Phase 3.6.1 の削除機能で消して本番 `/` から再生成すれば、3.7.1 の新パーサで正しい `excel_parsed` 込みで保存される
+- `eval_test_cases` 登録済みの「家計画 / 2026/3」も古いパース結果を持つため、Excel 再アップロードで `input_excel_data` を更新する必要あり
+- Supabase Advisor から RLS 警告（11テーブル無効）— anon キーで全書き込み可能な状態。本セッションでは別件としてスコープ外
+
+---
+
 ## 完了済み
 
 - [x] Step 1: Supabaseテーブル作成
@@ -206,6 +245,100 @@
   - **既存への影響なし**: 本番 `/`, `/api/generate-report`, `/api/knowledge` GET, `/admin`, `/admin/knowledge`, `/admin/knowledge/import` は無変更。`best_practices` テーブル・`master_fmt` テーブルへの書き込みなし
   - 検証: `npx tsc --noEmit` / `npx eslint`（対象ファイル）/ `npx next build` すべて成功
   - **運用注**: `best_practices` テーブルは現状 0 件のため、運用初期は常に「表現ナレッジを参照していません」が表示される想定。`/admin/knowledge` から既存ナレッジを★登録すると次回以降に拾われる
+
+- [x] Step 8-q: ExcelParseAgent を Instagram AI Pro 固定構造パーサに刷新（Phase 3.7.1 / 2026-05-22）
+  - **背景**: Phase 3.7 でキーワード検索ベースのパーサに項目追加したが、実Excel（Instagram AI Pro エクスポート）で `summary.view=0`, `profile_access=0`, `link_clicks=0`, `monthly_trends.view_total=0`, `feed_posts=[]`, `reel_posts=[]`, `top_cities=[]` 等の致命的欠落が判明
+  - **方針**: 全クライアントが同一フォーマット（Instagram AI Pro エクスポート）を使う前提で、キーワード検索を捨てて **シート別の固定カラム位置読み** に書き直し
+  - **型定義拡張**: `lib/types.ts`
+    - `ExcelSummary` に `view_reel / view_feed / reach_reel / reach_feed / engagement_reel / engagement_feed` を追加（推移データ当月行からの内訳）
+    - `MonthlyTrend` に `reach_reel / reach_feed / engagement_reel / engagement_feed / profile_access / link_clicks` を追加（推移データ14列に全対応）
+  - **パーサ刷新**: `app/api/parse-excel/route.ts` を全面リファクタ
+    - `parseSummary`: `ホーム-数値サマリー`（縦持ち）の列A ラベル完全一致で取得（フォロワー数/ビュー数/リーチ数/エンゲージメント/投稿数）
+    - `parseMonthlyTrends`: `ホーム-推移データ`（横持ち14列）を固定 index で読む（0:No., 1:月, 2-5: フォロワー/ビュー総/リール/フィード, 6-8: リーチ総/リール/フィード, 9-11: ENG 総/リール/フィード, 12-13: プロフィールクリック/リンククリック）
+    - `parseRanking`: `ホーム-{フィード|リール}ランキング TOP5`（横持ち6列）— [順位, タイトル, リーチ数, エンゲージメント, エンゲージメント率, 投稿URL]
+    - `parsePosts`: `投稿分析-{フィード|リール}`（横持ち11列）— [No., タイトル, 投稿日, タイプ, ビュー, リーチ, ENG, ENG率, いいね, コメント, 保存]
+    - `parseAgeGender`: `デモグラフィック分析-年齢・性別分析（フォロワー数）`（5列）— [No., 年齢層, 男, 女, 合計]
+    - `parseRegion`: `デモグラフィック分析-{都道府県|都市}`（4列）— [No., 名称, 値, 比率(%)]。`ratio` は Excel上の値（"93.70" 等）に文字列で "%" を付けるだけ（10倍補正は廃止 — Excel値は既に％単位）
+    - `extractTitle`: 投稿本文を行分割し、`.` と `━` 区切りで境界判定。最初の意味のある 1-3 行を取得して boilerplate（『残し続ける1ページ』等）混入を回避
+    - **summary 補完**: `ホーム-数値サマリー` には `profile_access / link_clicks / *_reel / *_feed` が無いため、`monthly_trends` の当月行（`target_month` 一致）から補完。`post_count` が 0 のときは投稿明細の合計、`comments` が 0 のときは投稿明細のコメント合計でフォールバック
+  - **excel-to-kpi 更新**: `lib/excel-to-kpi.ts`
+    - `feed_reach_avg / reel_reach_avg / feed_view_avg / reel_view_avg` を `currentTrend.{reach,view}_{feed,reel} ÷ {feed|reel}_post_count` で算出（投稿明細から平均する旧方式を廃止）
+    - `currentTrend` は `target_month` 一致行 → 末尾行 → null の順でフォールバック
+    - `profile_access / link_clicks` は `summary` を優先、空なら `currentTrend` から取得
+  - **動作確認（サンプルExcel 2026/03）**: `npx next build` → `next start -p 3777` → `POST /api/parse-excel` で21件全期待値クリア
+    - `summary`: view=14663, reach=7583, follower=1031, engagement=690, post_count=35, profile_access=555, link_clicks=14, view_reel=2017, view_feed=6925, reach_reel=1314, reach_feed=3093, engagement_reel=214, engagement_feed=958 ✅
+    - `monthly_trends[0]`: 14項目すべて期待値通り（view_total=8942 と summary.view=14663 は別物として両方保持）✅
+    - `feed_posts.length=12 / reel_posts.length=4 / feed_ranking.length=5 / reel_ranking.length=4` ✅
+    - `prefectures.length=14 / cities.length=45 / age_gender.length=7` ✅
+    - `prefectures[0..3].ratio = "93.70%, 1.03%, 1.03%, 0.80%"`（10倍バグ修正）✅
+    - 投稿タイトル: ranking と posts いずれもボイラープレート除外で個別タイトルが入る
+  - **既存への影響**: 関数シグネチャと `ExcelParseResult` の既存キーは無変更（追加のみ）。本番 `/api/generate-report`, ReportGenerator 自動保存、`/api/calc-diff`, `/admin/eval/generate`, `/admin/knowledge/import` の Excel モードはすべて再ビルドで自動的に新パーサを利用
+  - **運用上の留意**:
+    - 既存 `knowledge_base` の壊れデータ（家計画 2026/03 view=0）は本Phase の対象外。Phase 3.6.1 の削除機能 + 本番再生成で更新する必要あり（運用作業 G）
+    - 検証画面に登録済みの `eval_test_cases` の `input_excel_data` も古いパース結果を持つため、Excel再アップロードで更新を推奨
+  - 検証: `npx tsc --noEmit` / `npx eslint`（対象ファイル）/ `npx next build` すべて成功 + サンプルExcelでの実行テストOK
+
+- [x] Step 8-p: DiffCalcAgent を knowledge_base 参照型へ移行 + Excel項目拡充（2026-05-22）
+  - **背景**: Phase 3.7。Excelに当月分しか入らない運用に変わったため、前月比は前月レコードの `kpi_summary` から取得する必要がある。同時に各セクション考察に必要な詳細データ（性別比・年齢分布・地域・各種平均・コメント・プロフィールアクセス・リンククリック）を保存する
+  - **マイグレーション**: `supabase/migrations/007_knowledge_base_excel_parsed.sql`（新規、適用済み）
+    - `knowledge_base.excel_parsed jsonb DEFAULT '{}'::jsonb` を追加（カラム拡充は `IF NOT EXISTS`）
+    - 既存2レコードはデフォルト `{}` で初期化済み
+    - 番号は 006 が `eval_prompts_v16_seed.sql` で既使用のため 007 を採用
+  - **型定義**: `lib/types.ts` 拡張
+    - `ExcelSummary` に `comments / profile_access / link_clicks` を追加
+    - `PostDetail` に `comments` を追加
+    - `KnowledgeBase` に `excel_parsed` フィールド追加
+    - 新規型: `KpiSummary` / `KpiGenderRatio` / `KpiAgeDistribution`
+  - **ExcelParseAgent**: `app/api/parse-excel/route.ts`
+    - `parseSummary`: 「プロフィール」「リンククリック / ウェブサイト / 外部リンク」「コメント」の各キーワードで行ラベルを判定し、見つからなければ 0
+    - `parsePostDetails`: `comments` 列を `「コメント」/「comment」` で検索追加
+    - 既存項目の値・順序は無変更（後方互換）
+  - **新ヘルパー**: `lib/excel-to-kpi.ts`（新規）
+    - `excelToKpiSummary(ExcelParseResult): KpiSummary`
+    - 既存5キー（follower/view/reach/engagement/post_count）を引き継ぎつつ、性別比集計（`gender_ratio`）/ 年齢分布マッピング（`age_distribution` を 13-17 / 18-24 / 25-34 / 35-44 / 45-54 / 55-64 / 65+ の7バケットへ正規化）/ 都道府県・市区町村 TOP10（`top_prefectures` / `top_cities`）/ フィード/リールのリーチ平均・ビュー平均・本数 / `engagement_rate = engagement/reach` / いいね・保存・コメント合計 / `profile_access` / `link_clicks` を生成
+    - `follower_net_increase` は前月比較が必要なため 0 固定（calc-diff 側で算出可能）
+  - **DiffCalcAgent**: `app/api/calc-diff/route.ts`
+    - 入力に `client_id?` / `target_month_override?` を追加
+    - `client_id` 指定時は `knowledge_base` から `(client_id, prev_month)` で前月レコードを取得し、その `kpi_summary` の `view/reach/follower/engagement` と当月 Excel の `summary` を比較
+    - 前月レコードなし: `prev=0`, `diff_rate="N/A"`, `trend="データ不足（前月レコードなし）"`
+    - 前月レコードはあるが該当キーが欠落: `prev=0`, `diff_rate="N/A"`, `trend="データ不足（前月の${key}未保存）"`
+    - `monthly_trends.length < 3` の場合はトレンドを2点比較（上昇/下降/横ばい）で代替
+    - `client_id` 未指定時は旧 monthly_trends ベースで動く（後方互換）
+  - **caller 更新**:
+    - `app/api/eval/generate-section/route.ts`: `calcDiffInternal(excel, request, { clientId, targetMonth })` に変更（target_month は `toSlashYearMonth(yearMonth)`）
+    - `components/ReportGenerator.tsx`: `/api/calc-diff` 呼び出し時に `client_id` と `target_month_override: excelData.target_month` を渡す
+  - **自動保存拡張**: `components/ReportGenerator.tsx`
+    - 自動保存の `kpi_summary` を `excelData.summary` → `excelToKpiSummary(excelData)` に変更
+    - 同時に `excel_parsed: excelData` を送信
+    - `app/api/knowledge/route.ts` POST は `excel_parsed` フィールドを受け取り、未指定時は `{}` で INSERT
+  - **手動投入画面**: `app/admin/knowledge/import/page.tsx`
+    - 「入力モード」ラジオ（手動入力 / Excelアップロード）を追加
+    - Excelモード: ファイル選択 → `/api/parse-excel` → 確認表（サマリー / 性別・年齢分布 / 投稿本数）を表示、target_month / kpi_summary / excel_parsed をフォーム状態に自動セット
+    - 手動モード: 既存挙動を維持（5項目任意入力）
+    - 両モードで `excel_parsed` を送信（手動時は `{}`）
+  - **検証画面**: `app/admin/eval/generate/page.tsx` の SummaryTable に「コメント / プロフィールアクセス / リンククリック」3行を追加
+  - **既存への影響**:
+    - 本番 `/` の挙動はそのまま（呼び出し方の変化のみ。calc-diff は client_id を渡すと新方式に切替）
+    - 既存テストケース（家計画 2026/03）で生成しても旧フィールドはすべて互換、追加項目だけ増える
+  - **運用上の留意**:
+    - 既存 2026/03 レコードは `view=0` の壊れデータ。Phase 3.6.1 削除機能で消した上で本番から再生成 → `excel_parsed` 込みで自動保存されると新方式の前月比が機能する
+    - 家計画 2026/02 のみが kpi 完全保有のため、`generate-section` で 2026/03 を再現するときは 2026/02 を前月として参照
+  - 検証: `npx tsc --noEmit` / `npx eslint`（対象ファイル）/ `npx next build` すべて成功
+
+- [x] Step 8-o: ナレッジDB一覧に削除機能を追加（2026-05-22）
+  - **背景**: Phase 3.6.1。手動投入機能で誤登録・重複登録した際に、レコードを消す手段がなかった
+  - **API**: `app/api/knowledge/[id]/route.ts`（新規 / DELETE）
+    - `knowledge_base` を物理削除。事前に `.maybeSingle()` で存在チェックし、無ければ 404 を返す
+    - `best_practices_knowledge_base_id_fkey` は ON DELETE CASCADE 設定済み（`confdeltype='c'` 確認済み）のため、紐づく `best_practices` レコードも自動で連動削除される
+    - 既存 `app/api/knowledge/route.ts` の GET/POST は無変更
+  - **画面**: `app/admin/knowledge/page.tsx`（修正）
+    - 各カードのベストプラクティス操作ボタンと展開矢印の間に、赤色のゴミ箱アイコン（インライン SVG `TrashIcon`）を配置
+    - クリックで確認モーダル（オーバーレイ + 中央寄せ）を表示し、クライアント名 / 年月 / FMTバージョン / 「⚠️ この操作は取り消せません」を提示
+    - 「削除する」で `DELETE /api/knowledge/{id}` を呼び、成功時はローカル state から `records` と `bestPractices` を即時除外。展開中なら閉じる
+    - 右下に 3 秒で消えるトースト（success=emerald / error=red）で「削除しました」「削除に失敗しました」を表示
+    - オーバーレイクリック・キャンセルボタンで閉じる（削除実行中は無効化）
+  - **既存への影響なし**: `/`, `/admin`, `/admin/knowledge/import`, `/admin/eval/*`、本番 `/api/generate-report`, `/api/knowledge` GET/POST, ReportGenerator 自動保存フローは無変更
+  - 検証: `npx tsc --noEmit` / `npx eslint`（対象ファイル）/ `npx next build` すべて成功
 
 ## 未着手
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
 import type {
   ExcelParseResult,
   DiffCalcResult,
@@ -91,30 +92,203 @@ function summarizeDemographics(data: ExcelParseResult["demographics"]): string {
 }
 
 // ==========================================
+// Phase 3.7: knowledge_base 参照型の前月比計算
+// ==========================================
+
+type KpiKey = "view" | "reach" | "follower" | "engagement";
+
+function pickKpi(kpi: Record<string, unknown> | null | undefined, key: KpiKey): number | null {
+  if (!kpi) return null;
+  const v = kpi[key];
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v.replace(/[,%]/g, ""));
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * 前月レコードが見つからない場合の KpiDiffItem を作成
+ */
+function buildMissingPrevKpi(current: number): KpiDiffItem {
+  return {
+    current,
+    prev: 0,
+    diff_rate: "N/A",
+    trend: "データ不足（前月レコードなし）",
+  };
+}
+
+/**
+ * 前月レコードの kpi_summary に当該キーが無い場合の KpiDiffItem を作成
+ */
+function buildPartialPrevKpi(current: number, key: KpiKey): KpiDiffItem {
+  return {
+    current,
+    prev: 0,
+    diff_rate: "N/A",
+    trend: `データ不足（前月の${key}未保存）`,
+  };
+}
+
+/**
+ * "2026/03" → "2026/02"
+ */
+function prevYearMonthSlash(yearMonthSlash: string): string | null {
+  const match = yearMonthSlash.match(/^(\d{4})\/(0[1-9]|1[0-2])$/);
+  if (!match) return null;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  if (m === 1) return `${y - 1}/12`;
+  return `${y}/${String(m - 1).padStart(2, "0")}`;
+}
+
+interface KbReferenceResult {
+  prevMonth: string;
+  prevKpi: Record<string, unknown> | null;
+  found: boolean;
+}
+
+async function fetchPrevKnowledgeBase(
+  clientId: string,
+  targetMonth: string
+): Promise<KbReferenceResult> {
+  const prevMonth = prevYearMonthSlash(targetMonth) ?? "";
+  if (!prevMonth) {
+    return { prevMonth: "", prevKpi: null, found: false };
+  }
+
+  const { data, error } = await supabase
+    .from("knowledge_base")
+    .select("kpi_summary")
+    .eq("client_id", clientId)
+    .eq("year_month", prevMonth)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) {
+    return { prevMonth, prevKpi: null, found: false };
+  }
+  return {
+    prevMonth,
+    prevKpi: (data.kpi_summary as Record<string, unknown> | null) ?? null,
+    found: true,
+  };
+}
+
+function buildKpiDiffFromKb(
+  currentExcel: { view: number; reach: number; follower: number; engagement: number },
+  trends: MonthlyTrend[],
+  prevKpi: Record<string, unknown> | null,
+  found: boolean
+): DiffCalcResult["kpi_diff"] {
+  function build(key: KpiKey, current: number): KpiDiffItem {
+    if (!found || !prevKpi) {
+      return buildMissingPrevKpi(current);
+    }
+    const prev = pickKpi(prevKpi, key);
+    if (prev === null) {
+      return buildPartialPrevKpi(current, key);
+    }
+    return {
+      current,
+      prev,
+      diff_rate: calcDiffRate(current, prev),
+      trend:
+        trends.length >= 3
+          ? calcTrend(
+              trends,
+              key === "view"
+                ? (t) => t.view_total
+                : key === "reach"
+                ? (t) => t.reach_total
+                : key === "follower"
+                ? (t) => t.follower
+                : (t) => t.engagement_total
+            )
+          : (current > prev ? "上昇" : current < prev ? "下降" : "横ばい"),
+    };
+  }
+
+  return {
+    view: build("view", currentExcel.view),
+    reach: build("reach", currentExcel.reach),
+    follower: build("follower", currentExcel.follower),
+    engagement: build("engagement", currentExcel.engagement),
+  };
+}
+
+// ==========================================
 // メインハンドラ
 // ==========================================
 
+interface CalcDiffRequest extends ExcelParseResult {
+  client_id?: string;
+  target_month_override?: string; // "YYYY/MM" — excel.target_month が信頼できない場合用
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body: ExcelParseResult = await request.json();
-    const { monthly_trends, feed_ranking, reel_ranking, feed_posts, demographics } = body;
+    const body = (await request.json()) as CalcDiffRequest;
+    const {
+      monthly_trends,
+      feed_ranking,
+      reel_ranking,
+      feed_posts,
+      demographics,
+      summary,
+      target_month,
+      client_id,
+      target_month_override,
+    } = body;
 
-    if (monthly_trends.length === 0) {
-      return NextResponse.json({ error: "月次推移データがありません" }, { status: 400 });
+    const currentMonth =
+      target_month_override && /^\d{4}\/(0[1-9]|1[0-2])$/.test(target_month_override)
+        ? target_month_override
+        : target_month ||
+          (monthly_trends.length > 0
+            ? monthly_trends[monthly_trends.length - 1].year_month
+            : "");
+
+    let kpiDiff: DiffCalcResult["kpi_diff"];
+    let prevMonth = "";
+
+    if (client_id && currentMonth) {
+      // 新方式: knowledge_base から前月の kpi_summary を取得
+      const { prevMonth: pm, prevKpi, found } = await fetchPrevKnowledgeBase(
+        client_id,
+        currentMonth
+      );
+      prevMonth = pm;
+      kpiDiff = buildKpiDiffFromKb(
+        {
+          view: summary.view,
+          reach: summary.reach,
+          follower: summary.follower,
+          engagement: summary.engagement,
+        },
+        monthly_trends,
+        prevKpi,
+        found
+      );
+    } else {
+      // 旧方式（後方互換）: Excel 内の monthly_trends から前月比
+      if (monthly_trends.length === 0) {
+        return NextResponse.json({ error: "月次推移データがありません" }, { status: 400 });
+      }
+      prevMonth =
+        monthly_trends.length >= 2
+          ? monthly_trends[monthly_trends.length - 2].year_month
+          : "";
+      kpiDiff = {
+        view: buildKpiDiff(monthly_trends, (t) => t.view_total),
+        reach: buildKpiDiff(monthly_trends, (t) => t.reach_total),
+        follower: buildKpiDiff(monthly_trends, (t) => t.follower),
+        engagement: buildKpiDiff(monthly_trends, (t) => t.engagement_total),
+      };
     }
-
-    const currentMonth = monthly_trends[monthly_trends.length - 1].year_month;
-    const prevMonth = monthly_trends.length >= 2
-      ? monthly_trends[monthly_trends.length - 2].year_month
-      : "";
-
-    // KPI差分計算
-    const kpiDiff = {
-      view: buildKpiDiff(monthly_trends, (t) => t.view_total),
-      reach: buildKpiDiff(monthly_trends, (t) => t.reach_total),
-      follower: buildKpiDiff(monthly_trends, (t) => t.follower),
-      engagement: buildKpiDiff(monthly_trends, (t) => t.engagement_total),
-    };
 
     // TOP / ワースト投稿
     const topFeed = feed_ranking.length > 0
@@ -125,7 +299,6 @@ export async function POST(request: NextRequest) {
       ? { title: reel_ranking[0].title, eng_rate: reel_ranking[0].eng_rate }
       : { title: "データなし", eng_rate: "0%" };
 
-    // ワースト: feed_postsからeng_rateが最低のものを取得
     const worstFeed = feed_posts.length > 0
       ? (() => {
           const sorted = [...feed_posts].sort((a, b) => a.eng_rate - b.eng_rate);

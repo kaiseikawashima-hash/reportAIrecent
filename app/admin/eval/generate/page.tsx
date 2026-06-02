@@ -654,6 +654,9 @@ function SummaryTable({ summary }: { summary: ExcelParseResult["summary"] }) {
     ["リーチ", summary.reach],
     ["エンゲージメント", summary.engagement],
     ["投稿数", summary.post_count],
+    ["コメント", summary.comments],
+    ["プロフィールアクセス", summary.profile_access],
+    ["リンククリック", summary.link_clicks],
   ];
   return (
     <table className="text-xs w-full">

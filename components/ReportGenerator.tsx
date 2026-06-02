@@ -6,6 +6,7 @@ import ExcelUploader from "./ExcelUploader";
 import ScreenshotUploader from "./ScreenshotUploader";
 import ReportOutput from "./ReportOutput";
 import type { ExcelParseResult } from "@/lib/types";
+import { excelToKpiSummary } from "@/lib/excel-to-kpi";
 
 interface SectionStatus {
   key: string;
@@ -81,11 +82,15 @@ export default function ReportGenerator() {
 
       const excelData: ExcelParseResult = await parseRes.json();
 
-      // Step 2: 差分計算
+      // Step 2: 差分計算（Phase 3.7: knowledge_base 参照型 — client_id + target_month を渡す）
       const diffRes = await fetch("/api/calc-diff", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(excelData),
+        body: JSON.stringify({
+          ...excelData,
+          client_id: clientId,
+          target_month_override: excelData.target_month,
+        }),
       });
 
       if (!diffRes.ok) {
@@ -192,11 +197,12 @@ export default function ReportGenerator() {
               client_id: clientId,
               year_month: excelData.target_month,
               fmt_version: meta.fmt_version,
-              kpi_summary: excelData.summary,
+              kpi_summary: excelToKpiSummary(excelData),
               top_posts: {
                 feed_ranking: excelData.feed_ranking,
                 reel_ranking: excelData.reel_ranking,
               },
+              excel_parsed: excelData,
               report_text: meta.full_text,
             }),
           });

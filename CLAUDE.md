@@ -97,8 +97,9 @@ create table knowledge_base (
   client_id uuid references clients(id),
   year_month text not null,         -- 例: "2026/03"
   fmt_version integer not null,     -- 生成時のFMTバージョン
-  kpi_summary jsonb,                -- 数値サマリー（JSON）
+  kpi_summary jsonb,                -- Phase 3.7: 拡充 KPI（性別比 / 年齢分布 / 地域TOP / フィード&リール別平均 等）
   top_posts jsonb,                  -- TOP投稿情報（JSON）
+  excel_parsed jsonb default '{}'::jsonb,  -- Phase 3.7: ExcelParseAgent出力全体（前月比 / 詳細考察用）
   report_text text,                 -- 生成された考察テキスト全文
   quality_flag boolean,             -- NULL許容（将来の評価用）
   created_at timestamp with time zone default now()
@@ -194,7 +195,13 @@ create table knowledge_base (
 
 **役割**: ExcelParseAgentの出力から前月比・3ヶ月トレンドを計算し、AIに渡せる差分コンテキストを生成する
 
-**入力**: ExcelParseAgentの出力JSON
+**Phase 3.7 以降の参照方式**: 当月Excelには当月分のみ入る運用に変わったため、前月比は前月の `knowledge_base.kpi_summary` から取得する方式（旧 `monthly_trends` 内前月行ベースは後方互換として残存）。
+
+**入力**: ExcelParseAgentの出力JSON + `client_id?` + `target_month_override?`
+- `client_id` 指定時: `knowledge_base` から `(client_id, prev_month)` を引いて kpi_summary の view/reach/follower/engagement と比較
+- 前月レコードなし: `prev=0, diff_rate="N/A", trend="データ不足（前月レコードなし）"`
+- 前月レコードはあるが該当キー欠落: `trend="データ不足（前月の{key}未保存）"`
+- `client_id` 未指定: 旧 monthly_trends ベース（後方互換）
 
 **出力**:
 ```typescript

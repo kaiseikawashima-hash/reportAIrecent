@@ -61,7 +61,15 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { client_id, year_month, fmt_version, kpi_summary, top_posts, report_text } = body;
+    const {
+      client_id,
+      year_month,
+      fmt_version,
+      kpi_summary,
+      top_posts,
+      excel_parsed,
+      report_text,
+    } = body;
 
     if (!client_id || !year_month || fmt_version == null || !report_text) {
       return NextResponse.json(
@@ -85,6 +93,7 @@ export async function POST(request: NextRequest) {
         fmt_version,
         kpi_summary: kpi_summary ?? {},
         top_posts: top_posts ?? {},
+        excel_parsed: excel_parsed ?? {},
         report_text,
       })
       .select()

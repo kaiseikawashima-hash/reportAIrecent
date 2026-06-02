@@ -159,3 +159,49 @@ Supabaseプロジェクト: `sfgunchibzhtpsaldffu`
 - `app/api/master-fmt/route.ts` の POST は「アクティブな最新の version + 1」で新版を作る。すでに version=4 が active なので、次に admin から保存すると v5 になる。**手動投入で穴が空くと**（v1 active 状態で v5 を手動 insert してから admin から保存、等）番号が飛ぶ可能性あり。
 - `eval_prompt_versions.parent_version_id` は POST 時にしかセットされず、DELETE 時の整合性チェック（参照されている版は物理削除不可）は適用していない。現状ソフトデリートのみなので問題は表面化していない。
 - `app/admin/eval/page.tsx` の件数取得は `is_active=true` のデフォルトのため、ソフトデリート済みのものは表示件数に乗らない。ユーザー期待と一致しているか要確認。
+
+---
+
+## 7. 2026-05-22 時点の差分（Phase 3.6 〜 3.7.1）
+
+このセクションは初版（2026-05-21）以降の変更ポイントのみ。詳細な実装ノートは `todo.md` の Step 8-n / 8-o / 8-p / 8-q 参照。
+
+### 7.1 マイグレーション
+- `supabase/migrations/007_knowledge_base_excel_parsed.sql`（Supabase 適用済み、検証クエリ確認済み）
+  - `knowledge_base.excel_parsed jsonb DEFAULT '{}'::jsonb` を追加
+  - 既存2レコード（家計画 2026/02・2026/03）はデフォルト `{}` で初期化済み
+- 番号 006 は既存の `eval_prompts_v16_seed.sql`、007 が今回追加分
+
+### 7.2 テーブル現状（差分のみ）
+- `knowledge_base` カラム: 既存8カラム + 新規 `excel_parsed jsonb` の計9カラム
+- 全レコード: 依然として2件（家計画 2026/02, 2026/03）。両者とも `excel_parsed = '{}'` のまま（次回本番再生成時に正しい値が入る）
+- `best_practices`: 0件のまま
+- `eval_runs`: 7件（Phase 3 検証用の蓄積）
+
+### 7.3 新規 API
+| ルート | メソッド | 役割 |
+|---|---|---|
+| `/api/master-fmt/list` | GET | 全FMTバージョン降順返却（既存 `/api/master-fmt` は active 最新1件のみ） |
+| `/api/knowledge/[id]` | DELETE | knowledge_base 物理削除（best_practices は ON DELETE CASCADE で連動） |
+
+### 7.4 既存 API の仕様変更（後方互換あり）
+- `/api/parse-excel`: シート別固定カラム読みに刷新。`ExcelSummary` に `view_reel/feed`, `reach_reel/feed`, `engagement_reel/feed`, `profile_access`, `link_clicks` を追加。`MonthlyTrend` を14列対応に拡張。`PostDetail` に `comments` 追加。`region.ratio` の 10倍誤補正バグを修正
+- `/api/calc-diff`: 入力に `client_id?` と `target_month_override?` を追加。`client_id` 指定時は `knowledge_base` の前月 `kpi_summary` から前月比を計算。未指定なら旧 `monthly_trends` ベースの挙動を維持（後方互換）
+- `/api/knowledge` POST: `excel_parsed` フィールドを受け入れ。`kpi_summary={}` / `top_posts={}` を許容（手動投入対応）
+- `/api/eval/generate-section`: 参照ロジックを「同社6+他社4」から「前月レポ1+best_practices 1」に変更。`actual_references.reference_status` で参照成否＋理由を記録
+
+### 7.5 新規画面・コンポーネント
+- `app/admin/knowledge/import/page.tsx`: 過去レポート手動投入画面。「手動入力」「Excelアップロード」モード切替（後者は parse-excel 経由でパース確認表 + target_month/kpi_summary/excel_parsed 自動セット）
+- `app/admin/eval/generate/page.tsx`: `ReferenceNotice` + `ReferenceBlock` 追加（参照状況バナーと2ブロック化）+ SummaryTable に comments/profile_access/link_clicks 行追加
+- `app/admin/knowledge/page.tsx`: 各カードに削除ゴミ箱アイコン + 確認モーダル + 3秒トースト追加
+
+### 7.6 新規 lib
+- `lib/excel-to-kpi.ts`: `excelToKpiSummary(ExcelParseResult): KpiSummary`。性別比集計、年齢分布7バケット正規化、都道府県/市区町村TOP10、フィード/リール別平均、ENG率、各種合計値を生成
+- `lib/types.ts`: `KpiSummary` / `KpiGenderRatio` / `KpiAgeDistribution` 型を追加。`KnowledgeBase` に `excel_parsed` フィールド追加
+
+### 7.7 残課題
+- 既存 `knowledge_base` 2件は壊れデータ（家計画 2026/03 view=0、両者 excel_parsed={}）。Phase 3.6.1 の削除機能 + 本番再生成で復旧予定
+- `eval_test_cases` の `input_excel_data` も古いパース結果を保持。再アップロードで更新推奨
+- `best_practices` 0件 → 検証側で常時「参照していません」表示。`/admin/knowledge` から★登録で解消
+- Phase 3 検証機能（生成・採点・横並び比較）の Phase 3.5 以降は未着手（todo.md Step 8-k）
+- RLS 全テーブル無効（Supabase Advisor 警告）— 別フェーズで検討

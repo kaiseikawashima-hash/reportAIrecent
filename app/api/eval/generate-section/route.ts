@@ -81,13 +81,19 @@ async function parseExcelInternal(file: File, request: NextRequest): Promise<Exc
 
 async function calcDiffInternal(
   excel: ExcelParseResult,
-  request: NextRequest
+  request: NextRequest,
+  options?: { clientId?: string; targetMonth?: string }
 ): Promise<DiffCalcResult> {
   const url = new URL("/api/calc-diff", request.url);
+  const payload = {
+    ...excel,
+    ...(options?.clientId ? { client_id: options.clientId } : {}),
+    ...(options?.targetMonth ? { target_month_override: options.targetMonth } : {}),
+  };
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(excel),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({ error: "差分計算に失敗しました" }));
@@ -232,12 +238,16 @@ export async function POST(request: NextRequest) {
     // 4. Excel パース
     const excelData = await parseExcelInternal(excelFile, request);
 
-    // 5. 差分計算
-    const diffContext = await calcDiffInternal(excelData, request);
-
-    // 6. 直前月の正解レポート取得（過去レポート1件）
+    // 5. 差分計算（Phase 3.7: client_id + target_month を渡して knowledge_base 参照型）
     const targetMonthSlash = toSlashYearMonth(yearMonth);
     const prevMonthSlash = prevYearMonth(yearMonth);
+
+    const diffContext = await calcDiffInternal(excelData, request, {
+      clientId,
+      targetMonth: targetMonthSlash,
+    });
+
+    // 6. 直前月の正解レポート取得（過去レポート1件）
 
     const { data: prevKnowledgeRow } = await supabase
       .from("knowledge_base")

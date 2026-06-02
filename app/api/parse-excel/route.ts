@@ -12,49 +12,73 @@ import type {
 } from "@/lib/types";
 
 // ==========================================
-// ヘルパー関数
+// Phase 3.7.1
+// Instagram AI Pro のエクスポートExcelに合わせた固定構造パーサ
+// 全クライアントが同一フォーマットを使うため、シート別に固定カラム位置で読む
+// ==========================================
+
+// ==========================================
+// 共通ヘルパー
 // ==========================================
 
 function num(v: unknown): number {
-  if (typeof v === "number") return v;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
     const cleaned = v.replace(/[,%¥\s]/g, "").trim();
     const n = Number(cleaned);
-    return Number.isNaN(n) ? 0 : n;
+    return Number.isFinite(n) ? n : 0;
   }
   return 0;
 }
 
 function str(v: unknown): string {
   if (v == null) return "";
-  if (v instanceof Date) return v.toISOString();
+  if (v instanceof Date) {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, "0");
+    const d = String(v.getDate()).padStart(2, "0");
+    return `${y}/${m}/${d}`;
+  }
   return String(v).trim();
 }
 
-/** 『タイトル』形式から中身だけ抽出。なければ元テキスト */
-function extractTitle(raw: string): string {
-  const match = raw.match(/『(.+?)』/);
-  return match ? match[1] : raw.trim();
-}
-
-function findSheetByPartialName(wb: XLSX.WorkBook, keyword: string): unknown[][] | null {
-  const sheetName = wb.SheetNames.find((n) => n.includes(keyword));
-  if (!sheetName) return null;
-  return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "", raw: true }) as unknown[][];
-}
-
 /**
- * Excel シリアル値（1900-01-01 起算の日数）を YYYY/MM 形式に変換
+ * Instagram AI Pro 投稿本文からタイトルを抽出。
+ * 投稿本文は「.\n投稿固有のリード\n固有のサブリード\n━━━...\n以降は共通ボイラープレート」という構造。
+ * ボイラープレート内には『残し続ける1ページ』のような共通カッコ書きが含まれるため、
+ * 『...』検出ではなく ━ 区切りの直前までを採用する。
  */
-function excelSerialToYearMonth(serial: number): string {
-  // Excel epoch quirk: 1900-01-01 = 1, 1900-02-29 doesn't actually exist
-  const utcDays = serial - 25569;
-  const utcMs = utcDays * 86400 * 1000;
-  const date = new Date(utcMs);
-  if (Number.isNaN(date.getTime())) return "";
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}/${m}`;
+function extractTitle(raw: string): string {
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/);
+  const titleLines: string[] = [];
+  let started = false;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) {
+      if (started) break;
+      continue;
+    }
+    if (t === ".") continue;
+    if (/^━+$/.test(t)) {
+      if (started) break;
+      continue;
+    }
+    started = true;
+    titleLines.push(t);
+    if (titleLines.length >= 3) break;
+  }
+  return titleLines.join(" ");
+}
+
+function rowsOf(wb: XLSX.WorkBook, sheetName: string): unknown[][] {
+  const ws = wb.Sheets[sheetName];
+  if (!ws) return [];
+  return XLSX.utils.sheet_to_json(ws, {
+    header: 1,
+    defval: "",
+    raw: true,
+  }) as unknown[][];
 }
 
 /**
@@ -68,8 +92,15 @@ function formatYearMonth(v: unknown): string {
     return `${y}/${m}`;
   }
   if (typeof v === "number") {
-    // 30000 ≈ 1982, 80000 ≈ 2119 — Excel シリアル日付の妥当範囲
-    if (v > 30000 && v < 80000) return excelSerialToYearMonth(v);
+    if (v > 30000 && v < 80000) {
+      const utcDays = v - 25569;
+      const date = new Date(utcDays * 86400 * 1000);
+      if (!Number.isNaN(date.getTime())) {
+        const y = date.getUTCFullYear();
+        const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+        return `${y}/${m}`;
+      }
+    }
     return "";
   }
   const s = String(v).trim();
@@ -89,444 +120,213 @@ function formatYearMonth(v: unknown): string {
   return "";
 }
 
-/**
- * 先頭数行を走査してヘッダー行を特定。
- * minMatches 個以上のキーワードがいずれかのセルに含まれる行をヘッダーとみなす。
- */
-function detectHeader(
-  rows: unknown[][],
-  keywords: string[],
-  minMatches = 2
-): { headerIdx: number; header: string[] } {
-  const scanLimit = Math.min(rows.length, 10);
-  for (let r = 0; r < scanLimit; r++) {
-    const row = (rows[r] as unknown[]) ?? [];
-    const cells = row.map((c) => str(c).toLowerCase());
-    const matchCount = keywords.filter((kw) =>
-      cells.some((c) => c.includes(kw.toLowerCase()))
-    ).length;
-    if (matchCount >= Math.min(minMatches, keywords.length)) {
-      return { headerIdx: r, header: cells };
-    }
-  }
-  const fallback = ((rows[0] as unknown[]) ?? []).map((c) => str(c).toLowerCase());
-  return { headerIdx: 0, header: fallback };
-}
-
-/** ヘッダー配列から、いずれかのキーワードを含む列のインデックスを返す（OR） */
-function findCol(header: string[], keywords: string[]): number {
-  for (let i = 0; i < header.length; i++) {
-    const h = header[i];
-    if (!h) continue;
-    if (keywords.some((kw) => kw && h.includes(kw.toLowerCase()))) return i;
-  }
-  return -1;
-}
-
-/** ヘッダー配列から、すべてのキーワードを含む列のインデックスを返す（AND） */
-function findColAll(header: string[], keywords: string[]): number {
-  for (let i = 0; i < header.length; i++) {
-    const h = header[i];
-    if (!h) continue;
-    if (keywords.every((kw) => h.includes(kw.toLowerCase()))) return i;
-  }
-  return -1;
+/** Excel の比率(%) セルを "<値>%" 文字列にする（数値変換せず、Excel値をそのまま使う） */
+function ratioString(v: unknown): string {
+  if (v == null || v === "") return "0%";
+  const s = String(v).trim();
+  if (!s) return "0%";
+  if (s.endsWith("%")) return s;
+  return `${s}%`;
 }
 
 // ==========================================
-// パーサー: サマリー
+// 1. ホーム-数値サマリー
+// 縦持ち: [指標, 値, 変化率]
 // ==========================================
+
+const EMPTY_SUMMARY: ExcelSummary = {
+  follower: 0,
+  view: 0,
+  reach: 0,
+  engagement: 0,
+  post_count: 0,
+  comments: 0,
+  profile_access: 0,
+  link_clicks: 0,
+  view_reel: 0,
+  view_feed: 0,
+  reach_reel: 0,
+  reach_feed: 0,
+  engagement_reel: 0,
+  engagement_feed: 0,
+};
 
 function parseSummary(wb: XLSX.WorkBook): ExcelSummary {
-  const rows = findSheetByPartialName(wb, "数値サマリー") ?? findSheetByPartialName(wb, "サマリー");
-  if (!rows) return { follower: 0, view: 0, reach: 0, engagement: 0, post_count: 0 };
+  const rows = rowsOf(wb, "ホーム-数値サマリー");
+  const result: ExcelSummary = { ...EMPTY_SUMMARY };
+  if (rows.length < 2) return result;
 
-  const result: ExcelSummary = { follower: 0, view: 0, reach: 0, engagement: 0, post_count: 0 };
-
-  // サマリーシートは「項目: 値」の縦並びが多い。各行から最初の数値セルを値として採用する。
-  for (const row of rows) {
-    const r = row as unknown[];
-    const label = str(r[0]).toLowerCase();
-    if (!label) continue;
-    let value = 0;
-    for (let c = 1; c < r.length; c++) {
-      const v = r[c];
-      if (typeof v === "number") { value = v; break; }
-      if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v.replace(/[,%]/g, "")))) {
-        value = num(v); break;
-      }
-    }
-
-    if (label.includes("フォロワー")) result.follower = value;
-    else if (label.includes("リーチ")) result.reach = value;
-    else if (label.includes("エンゲージ")) result.engagement = value;
-    else if (label.includes("投稿数") || label.includes("投稿回数") || label.includes("投稿本数")) result.post_count = value;
-    else if (label.includes("表示") || label.includes("view") || label.includes("インプレッション") || label.includes("閲覧")) result.view = value;
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const label = str(row[0]);
+    const value = num(row[1]);
+    if (label === "フォロワー数") result.follower = value;
+    else if (label === "ビュー数") result.view = value;
+    else if (label === "リーチ数") result.reach = value;
+    else if (label === "エンゲージメント") result.engagement = value;
+    else if (label === "投稿数") result.post_count = value;
   }
-
   return result;
 }
 
 // ==========================================
-// パーサー: 月次推移
+// 2. ホーム-推移データ
+// 横持ち、14カラム固定
 // ==========================================
 
 function parseMonthlyTrends(wb: XLSX.WorkBook): { trends: MonthlyTrend[]; targetMonth: string } {
-  const rows = findSheetByPartialName(wb, "推移");
-  if (!rows || rows.length < 2) return { trends: [], targetMonth: "" };
-
-  const { headerIdx, header } = detectHeader(
-    rows,
-    ["年月", "月", "フォロワー", "リーチ", "リール", "フィード"]
-  );
-
-  let colYM = findCol(header, ["年月", "対象月", "月度", "month"]);
-  // 「月」単独はリーチ等と衝突しない位置のみ採用したいので最後の手段
-  if (colYM < 0) {
-    for (let i = 0; i < header.length; i++) {
-      const h = header[i];
-      if (h === "月" || h === "対象") { colYM = i; break; }
-    }
-  }
-  const colFollower = findCol(header, ["フォロワー"]);
-  const colReach = findCol(header, ["リーチ"]);
-  const colEng = findCol(header, ["エンゲージ"]);
-  const colViewReel =
-    findColAll(header, ["リール", "表示"]) >= 0
-      ? findColAll(header, ["リール", "表示"])
-      : findColAll(header, ["リール", "view"]);
-  const colViewFeed =
-    findColAll(header, ["フィード", "表示"]) >= 0
-      ? findColAll(header, ["フィード", "表示"])
-      : findColAll(header, ["フィード", "view"]);
-
-  // 合計表示列（リール／フィードのプレフィックスがない表示・閲覧）
-  let colViewTotal = -1;
-  for (let i = 0; i < header.length; i++) {
-    const h = header[i];
-    if (!h || i === colViewReel || i === colViewFeed) continue;
-    if ((h.includes("表示") || h.includes("閲覧") || h.includes("インプレッション") || h.includes("view")) &&
-        !h.includes("リール") && !h.includes("フィード")) {
-      colViewTotal = i;
-      break;
-    }
-  }
+  const rows = rowsOf(wb, "ホーム-推移データ");
+  if (rows.length < 2) return { trends: [], targetMonth: "" };
 
   const trends: MonthlyTrend[] = [];
-
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = (rows[i] as unknown[]) ?? [];
-
-    let year_month = "";
-    if (colYM >= 0) year_month = formatYearMonth(row[colYM]);
-    if (!year_month) {
-      // フォールバック: 各セルを試して "YYYY/MM" に正規化できる最初のセルを採用
-      for (let c = 0; c < row.length; c++) {
-        const ym = formatYearMonth(row[c]);
-        if (ym) { year_month = ym; break; }
-      }
-    }
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const year_month = formatYearMonth(row[1]);
     if (!/^\d{4}\/(0[1-9]|1[0-2])$/.test(year_month)) continue;
 
-    const trend: MonthlyTrend = {
+    trends.push({
       year_month,
-      follower: colFollower >= 0 ? num(row[colFollower]) : 0,
-      view_total: colViewTotal >= 0 ? num(row[colViewTotal]) : 0,
-      view_reel: colViewReel >= 0 ? num(row[colViewReel]) : 0,
-      view_feed: colViewFeed >= 0 ? num(row[colViewFeed]) : 0,
-      reach_total: colReach >= 0 ? num(row[colReach]) : 0,
-      engagement_total: colEng >= 0 ? num(row[colEng]) : 0,
-    };
-
-    if (trend.view_total === 0 && (trend.view_feed > 0 || trend.view_reel > 0)) {
-      trend.view_total = trend.view_feed + trend.view_reel;
-    }
-
-    trends.push(trend);
+      follower: num(row[2]),
+      view_total: num(row[3]),
+      view_reel: num(row[4]),
+      view_feed: num(row[5]),
+      reach_total: num(row[6]),
+      reach_reel: num(row[7]),
+      reach_feed: num(row[8]),
+      engagement_total: num(row[9]),
+      engagement_reel: num(row[10]),
+      engagement_feed: num(row[11]),
+      profile_access: num(row[12]),
+      link_clicks: num(row[13]),
+    });
   }
 
-  // 古い順（昇順）にソート（最後の要素が当月）
+  // 古い順に並べて、最後の要素が当月
   trends.sort((a, b) => a.year_month.localeCompare(b.year_month));
-
   const targetMonth = trends.length > 0 ? trends[trends.length - 1].year_month : "";
   return { trends, targetMonth };
 }
 
 // ==========================================
-// パーサー: 投稿ランキング
+// 3. ホーム-フィードランキング / リールランキング TOP5
+// 横持ち: [順位, タイトル, リーチ数, エンゲージメント, エンゲージメント率, 投稿URL]
 // ==========================================
 
-function parsePostRanking(wb: XLSX.WorkBook, keyword: string): PostRanking[] {
-  const rows = findSheetByPartialName(wb, keyword);
-  if (!rows || rows.length < 2) return [];
+function parseRanking(wb: XLSX.WorkBook, sheetName: string): PostRanking[] {
+  const rows = rowsOf(wb, sheetName);
+  if (rows.length < 2) return [];
 
-  const { headerIdx, header } = detectHeader(
-    rows,
-    ["タイトル", "投稿", "リーチ", "エンゲージ", "順位"]
-  );
+  const out: PostRanking[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const titleRaw = str(row[1]);
+    const url = str(row[5]);
+    if (!titleRaw && !url) continue;
 
-  const colRank = findCol(header, ["順位", "rank"]);
-  // URL 系は title より先に拾う（"投稿URL" が "投稿" にマッチしてタイトル扱いになるのを防ぐ）
-  const colUrl = findCol(header, ["url", "リンク", "permalink"]);
-  // タイトル列: "タイトル" が最優先。それが無ければ "投稿" を含む列のうち URL 列以外
-  let colTitle = findCol(header, ["タイトル", "title"]);
-  if (colTitle < 0) {
-    for (let i = 0; i < header.length; i++) {
-      const h = header[i];
-      if (!h || i === colUrl) continue;
-      if (h.includes("投稿") && !h.includes("url") && !h.includes("リンク") && !h.includes("permalink")) {
-        colTitle = i; break;
-      }
-    }
-  }
-  const colEngRate = findCol(header, ["エンゲージメント率", "エンゲージ率", "eng率", "eng_rate"]);
-  // エンゲージメント (率以外)
-  let colEngagement = -1;
-  for (let i = 0; i < header.length; i++) {
-    const h = header[i];
-    if (!h || i === colEngRate) continue;
-    if (h.includes("エンゲージ") && !h.includes("率") && !h.includes("rate")) { colEngagement = i; break; }
-  }
-  const colReach = findCol(header, ["リーチ"]);
-
-  const rankings: PostRanking[] = [];
-  let runningRank = 0;
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = (rows[i] as unknown[]) ?? [];
-    // 行が空ならスキップ
-    const hasAny = row.some((c) => c != null && str(c) !== "");
-    if (!hasAny) continue;
-    // タイトル/URL のいずれも空ならスキップ
-    const titleRaw = colTitle >= 0 ? str(row[colTitle]) : "";
-    const urlRaw = colUrl >= 0 ? str(row[colUrl]) : "";
-    if (!titleRaw && !urlRaw) continue;
-
-    runningRank++;
-    rankings.push({
-      rank: colRank >= 0 ? num(row[colRank]) || runningRank : runningRank,
+    out.push({
+      rank: num(row[0]) || i,
       title: extractTitle(titleRaw),
-      reach: colReach >= 0 ? num(row[colReach]) : 0,
-      engagement: colEngagement >= 0 ? num(row[colEngagement]) : 0,
-      eng_rate: colEngRate >= 0 ? str(row[colEngRate]) : "0%",
-      url: urlRaw,
+      reach: num(row[2]),
+      engagement: num(row[3]),
+      eng_rate: str(row[4]) || "0%",
+      url,
     });
   }
-
-  return rankings;
+  return out;
 }
 
 // ==========================================
-// パーサー: 投稿詳細
+// 4. 投稿分析-フィード / リール
+// 横持ち、11カラム固定
+// [No., 投稿タイトル, 投稿日, タイプ, ビュー数, リーチ数, ENG数, ENG率(%), いいね数, コメント数, 保存数]
 // ==========================================
 
-function parsePostDetails(wb: XLSX.WorkBook, keyword: string): PostDetail[] {
-  const rows = findSheetByPartialName(wb, keyword);
-  if (!rows || rows.length < 2) return [];
-
-  const { headerIdx, header } = detectHeader(
-    rows,
-    ["タイトル", "投稿", "リーチ", "いいね", "保存", "日付"]
-  );
-
-  const colUrl = findCol(header, ["url", "リンク", "permalink"]);
-  let colTitle = findCol(header, ["タイトル", "title"]);
-  if (colTitle < 0) {
-    for (let i = 0; i < header.length; i++) {
-      const h = header[i];
-      if (!h || i === colUrl) continue;
-      if (h.includes("投稿") && !h.includes("url") && !h.includes("リンク") && !h.includes("permalink")) {
-        colTitle = i; break;
-      }
-    }
-  }
-  const colDate = findCol(header, ["日付", "date", "投稿日"]);
-  const colReach = findCol(header, ["リーチ"]);
-  const colEngRate = findCol(header, ["エンゲージメント率", "エンゲージ率", "eng率"]);
-  let colEngagement = -1;
-  for (let i = 0; i < header.length; i++) {
-    const h = header[i];
-    if (!h || i === colEngRate) continue;
-    if (h.includes("エンゲージ") && !h.includes("率") && !h.includes("rate")) { colEngagement = i; break; }
-  }
-  const colView = findCol(header, ["表示", "閲覧", "view", "インプレッション"]);
-  const colLikes = findCol(header, ["いいね", "like"]);
-  const colSaves = findCol(header, ["保存", "save"]);
+function parsePosts(wb: XLSX.WorkBook, sheetName: string): PostDetail[] {
+  const rows = rowsOf(wb, sheetName);
+  if (rows.length < 2) return [];
 
   const posts: PostDetail[] = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = (rows[i] as unknown[]) ?? [];
-    const titleRaw = colTitle >= 0 ? str(row[colTitle]) : "";
-    const urlRaw = colUrl >= 0 ? str(row[colUrl]) : "";
-    if (!titleRaw && !urlRaw) continue;
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const titleRaw = str(row[1]);
+    const postDate = str(row[2]);
+    if (!titleRaw && !postDate) continue;
 
     posts.push({
-      title: extractTitle(titleRaw || urlRaw),
-      post_date: colDate >= 0 ? str(row[colDate]) : "",
-      view: colView >= 0 ? num(row[colView]) : 0,
-      reach: colReach >= 0 ? num(row[colReach]) : 0,
-      engagement: colEngagement >= 0 ? num(row[colEngagement]) : 0,
-      eng_rate: colEngRate >= 0 ? num(row[colEngRate]) : 0,
-      likes: colLikes >= 0 ? num(row[colLikes]) : 0,
-      saves: colSaves >= 0 ? num(row[colSaves]) : 0,
+      title: extractTitle(titleRaw),
+      post_date: postDate,
+      view: num(row[4]),
+      reach: num(row[5]),
+      engagement: num(row[6]),
+      eng_rate: num(row[7]), // 数値（例: 35.6）
+      likes: num(row[8]),
+      comments: num(row[9]),
+      saves: num(row[10]),
     });
   }
-
   return posts;
 }
 
 // ==========================================
-// パーサー: デモグラフィクス
+// 5. デモグラフィック分析-年齢・性別分析（フォロワー数）
+// 横持ち: [No., 年齢層, 男性, 女性, 合計]
 // ==========================================
 
-function isIntegerLikeLabel(s: string): boolean {
-  return /^\d+$/.test(s.trim());
-}
-
 function parseAgeGender(wb: XLSX.WorkBook): AgeGender[] {
-  const rows = findSheetByPartialName(wb, "年齢") ?? findSheetByPartialName(wb, "性別");
-  if (!rows || rows.length < 2) return [];
+  const rows = rowsOf(wb, "デモグラフィック分析-年齢・性別分析（フォロワー数）");
+  if (rows.length < 2) return [];
 
-  const { headerIdx, header } = detectHeader(
-    rows,
-    ["年齢", "区分", "年代", "男", "女", "合計"]
-  );
+  const out: AgeGender[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const age = str(row[1]);
+    if (!age) continue;
+    if (/^(合計|計|total)$/i.test(age)) continue;
 
-  let colAge = findCol(header, ["年齢", "年代", "区分"]);
-  // 「区分」が見つからなくても、男/女列の左隣を年齢列とみなす
-  const colMale = findCol(header, ["男"]);
-  const colFemale = findCol(header, ["女"]);
-  const colTotal = findCol(header, ["合計", "計", "total"]);
-
-  if (colAge < 0 && colMale > 0) colAge = colMale - 1;
-  if (colAge < 0) return [];
-
-  const result: AgeGender[] = [];
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = (rows[i] as unknown[]) ?? [];
-    const ageRaw = str(row[colAge]);
-    if (!ageRaw) continue;
-    if (/^合計|^計$|total/i.test(ageRaw)) continue;
-    if (isIntegerLikeLabel(ageRaw)) continue; // 連番インデックス除外
-
-    const male = colMale >= 0 ? num(row[colMale]) : 0;
-    const female = colFemale >= 0 ? num(row[colFemale]) : 0;
-    const totalRaw = colTotal >= 0 ? num(row[colTotal]) : 0;
-    result.push({
-      age: ageRaw,
+    const male = num(row[2]);
+    const female = num(row[3]);
+    const total = num(row[4]);
+    out.push({
+      age,
       male,
       female,
-      total: totalRaw || male + female,
+      total: total || male + female,
     });
   }
-  return result;
+  return out;
 }
 
-function parseRegion(
-  wb: XLSX.WorkBook,
-  primaryKeyword: string,
-  fallbackKeyword?: string
-): RegionData[] {
-  const rows =
-    findSheetByPartialName(wb, primaryKeyword) ??
-    (fallbackKeyword ? findSheetByPartialName(wb, fallbackKeyword) : null);
-  if (!rows || rows.length < 2) return [];
+// ==========================================
+// 6. デモグラフィック分析-都道府県 / 都市
+// 横持ち: [No., 名称, 値, 比率(%)]
+// 比率はExcel上の数値文字列にそのまま "%" を付ける（93.70 -> "93.70%"）
+// ==========================================
 
-  const headerKeywords = [primaryKeyword, "地域", "名", "県", "市", "割合", "比率", "人数", "件数", "数", "ユーザー"];
-  const { headerIdx, header } = detectHeader(rows, headerKeywords);
+function parseRegion(wb: XLSX.WorkBook, sheetName: string): RegionData[] {
+  const rows = rowsOf(wb, sheetName);
+  if (rows.length < 2) return [];
 
-  // 名前列: primary/fallbackKeyword をまずヘッダーに探す
-  let colName = findCol(
-    header,
-    [primaryKeyword, fallbackKeyword ?? "", "地域", "県名", "市名"].filter(Boolean) as string[]
-  );
-
-  // ratio列
-  const colRatio = findCol(header, ["割合", "比率", "%", "rate", "シェア"]);
-
-  // value（人数・件数等）列: ratio列以外で数値系キーワード
-  let colValue = -1;
-  for (let i = 0; i < header.length; i++) {
-    if (i === colName || i === colRatio) continue;
-    const h = header[i];
-    if (!h) continue;
-    if (h.includes("人数") || h.includes("件数") || h.includes("ユーザー") ||
-        h.includes("follower") || h.includes("フォロワー") || h.includes("人") ||
-        h.includes("数値") || h === "数" || h === "値") {
-      colValue = i;
-      break;
-    }
-  }
-
-  // ヘッダーから名前列が見つからない場合、データを見て推定する:
-  // - 先頭列が連番数字なら2番目を名前列とみなす
-  // - そうでなければ先頭列を名前列とする
-  if (colName < 0) {
-    const firstDataRow = (rows[headerIdx + 1] as unknown[]) ?? [];
-    let foundNameCol = -1;
-    for (let c = 0; c < firstDataRow.length; c++) {
-      const v = firstDataRow[c];
-      const s = str(v);
-      if (!s) continue;
-      if (typeof v === "number" || isIntegerLikeLabel(s)) continue;
-      foundNameCol = c;
-      break;
-    }
-    colName = foundNameCol >= 0 ? foundNameCol : 0;
-  }
-
-  // valueが特定できなかった場合、name列の次の数値列をvalueとする
-  if (colValue < 0) {
-    for (let c = colName + 1; c < header.length; c++) {
-      if (c === colRatio) continue;
-      const sample = (rows[headerIdx + 1] as unknown[])?.[c];
-      if (typeof sample === "number") { colValue = c; break; }
-      if (typeof sample === "string" && sample !== "" && !Number.isNaN(Number(sample.replace(/[,%]/g, "")))) {
-        colValue = c; break;
-      }
-    }
-  }
-
-  // value合計（割合補完用）
-  const result: RegionData[] = [];
-  let valueSum = 0;
-  for (let i = headerIdx + 1; i < rows.length; i++) {
-    const row = (rows[i] as unknown[]) ?? [];
-    const name = str(row[colName]);
+  const out: RegionData[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const name = str(row[1]);
     if (!name) continue;
-    if (isIntegerLikeLabel(name)) continue;
-    if (/^合計|^総|^計$|total|other|その他/i.test(name)) continue;
+    if (/^(合計|計|total|other|その他)$/i.test(name)) continue;
 
-    const value = colValue >= 0 ? num(row[colValue]) : 0;
-    valueSum += value;
-
-    let ratio = colRatio >= 0 ? str(row[colRatio]) : "";
-    if (ratio) {
-      if (!ratio.endsWith("%")) {
-        const n = Number(ratio.replace(/[,\s]/g, ""));
-        if (Number.isFinite(n)) {
-          ratio = n <= 1 ? `${(n * 100).toFixed(1)}%` : `${n.toFixed(1)}%`;
-        }
-      }
-    }
-    result.push({ name, value, ratio: ratio || "0%" });
+    out.push({
+      name,
+      value: num(row[2]),
+      ratio: ratioString(row[3]),
+    });
   }
-
-  // ratio が全部 "0%" のままで value 合計が >0 なら、value から ratio を計算
-  const ratiosEmpty = result.every((r) => r.ratio === "0%" || r.ratio === "");
-  if (ratiosEmpty && valueSum > 0) {
-    for (const r of result) {
-      r.ratio = `${((r.value / valueSum) * 100).toFixed(1)}%`;
-    }
-  }
-
-  return result;
+  return out;
 }
 
 function parseDemographics(wb: XLSX.WorkBook): Demographics {
   return {
     age_gender: parseAgeGender(wb),
-    prefectures: parseRegion(wb, "都道府県", "地域"),
-    cities: parseRegion(wb, "市区町村", "市町村"),
+    prefectures: parseRegion(wb, "デモグラフィック分析-都道府県"),
+    cities: parseRegion(wb, "デモグラフィック分析-都市"),
   };
 }
 
@@ -544,7 +344,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
-      return NextResponse.json({ error: "Excelファイル(.xlsx/.xls)をアップロードしてください" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Excelファイル(.xlsx/.xls)をアップロードしてください" },
+        { status: 400 }
+      );
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -552,11 +355,38 @@ export async function POST(request: NextRequest) {
 
     const summary = parseSummary(wb);
     const { trends, targetMonth } = parseMonthlyTrends(wb);
-    const feedRanking = parsePostRanking(wb, "フィード");
-    const reelRanking = parsePostRanking(wb, "リール");
-    const feedPosts = parsePostDetails(wb, "フィード投稿");
-    const reelPosts = parsePostDetails(wb, "リール投稿");
+
+    // 当月行から内訳・プロフィールクリック・リンククリックを補完
+    const currentTrend =
+      trends.find((t) => t.year_month === targetMonth) ?? trends[trends.length - 1] ?? null;
+    if (currentTrend) {
+      summary.view_reel = currentTrend.view_reel;
+      summary.view_feed = currentTrend.view_feed;
+      summary.reach_reel = currentTrend.reach_reel;
+      summary.reach_feed = currentTrend.reach_feed;
+      summary.engagement_reel = currentTrend.engagement_reel;
+      summary.engagement_feed = currentTrend.engagement_feed;
+      summary.profile_access = currentTrend.profile_access;
+      summary.link_clicks = currentTrend.link_clicks;
+    }
+
+    const feedRanking = parseRanking(wb, "ホーム-フィードランキング TOP5");
+    const reelRanking = parseRanking(wb, "ホーム-リールランキング TOP5");
+    const feedPosts = parsePosts(wb, "投稿分析-フィード");
+    const reelPosts = parsePosts(wb, "投稿分析-リール");
     const demographics = parseDemographics(wb);
+
+    // post_count が 0 で投稿明細が取れている場合はそれを採用
+    if (summary.post_count === 0) {
+      summary.post_count = feedPosts.length + reelPosts.length;
+    }
+
+    // 総コメント数を投稿明細から集計（数値サマリーに項目がないため）
+    if (summary.comments === 0) {
+      const feedComments = feedPosts.reduce((acc, p) => acc + p.comments, 0);
+      const reelComments = reelPosts.reduce((acc, p) => acc + p.comments, 0);
+      summary.comments = feedComments + reelComments;
+    }
 
     const result: ExcelParseResult = {
       summary,
