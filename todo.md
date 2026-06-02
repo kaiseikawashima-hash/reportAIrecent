@@ -31,6 +31,13 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 - `region.ratio` の 10倍誤補正バグを修正（Excel値はすでに％単位 → 文字列に "%" を付けるだけ）
 - 検証: サンプルExcel（NOCOSU 2026/03）で `npx next start` 実機テスト 21/21 項目期待値一致
 
+### 2026-06-02 — GitHub保存 + 削除APIのセキュリティ対応
+未コミットだった全変更（Excel刷新・前月比・ナレッジDB拡充・セキュリティガイダンス設定）を GitHub にコミット＆プッシュ。あわせて、バックグラウンドのセキュリティレビューが検出した削除APIの脆弱性2件を修正。→ Step 8-r
+- GitHub リポジトリ: `https://github.com/kaiseikawashima-hash/reportAIrecent`（既存リモートに push）
+- 機密確認: `.env*` は `.gitignore` 済み、APIキー類は未追跡（GitHubに上がっていない）
+- 認証追加: `DELETE /api/knowledge/[id]` は不可逆な破壊的操作のためサーバー側で `APP_PASSWORD` を必須化
+- fail-open 対策: `APP_PASSWORD` 未設定時、本番は拒否・開発のみ素通り（`ALLOW_UNAUTHENTICATED=1` で明示オプトイン可）、比較は `timingSafeEqual`
+
 ### 既知の運用課題（次セッション以降で対応想定）
 - `best_practices` レコードは現在 0 件 → 検証側で常に「⚠️ 表現ナレッジを参照していません」が表示される。`/admin/knowledge` から既存ナレッジを★登録すれば次回から拾われる
 - `knowledge_base` の 家計画 2026/03 は Phase 3.5 のパーサバグ由来で `view=0` の壊れデータ。Phase 3.6.1 の削除機能で消して本番 `/` から再生成すれば、3.7.1 の新パーサで正しい `excel_parsed` 込みで保存される
@@ -340,6 +347,22 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
   - **既存への影響なし**: `/`, `/admin`, `/admin/knowledge/import`, `/admin/eval/*`、本番 `/api/generate-report`, `/api/knowledge` GET/POST, ReportGenerator 自動保存フローは無変更
   - 検証: `npx tsc --noEmit` / `npx eslint`（対象ファイル）/ `npx next build` すべて成功
 
+- [x] Step 8-r: GitHub保存 + 削除APIセキュリティ対応（2026-06-02）
+  - **背景**: 「ファイルを失わないよう Git/GitHub に保存したい」という要望。既存リモート（`reportAIrecent`）は設定済みだが、直近の変更が未コミット・未プッシュだった
+  - **Git**: 未コミットの全変更（Phase 3.7 / 3.7.1 系のコード、`.claude/settings.json`、migration 007 等）をコミットして `origin/main` に push
+    - 機密確認: `.gitignore` の `.env*` で `.env.local` は除外済み・未追跡。APIキー類はGitHubに存在しない
+    - `.env.local.example` も `.env*` パターンで gitignore 対象のため未追跡（ローカルのテンプレートとしてのみ存在）
+  - **新規**: `lib/auth.ts` — サーバー側認証ヘルパー
+    - `x-app-password` ヘッダー / `app_password` Cookie を `APP_PASSWORD` と `crypto.timingSafeEqual` で照合
+    - `APP_PASSWORD` 未設定時: 本番（`NODE_ENV=production`）は拒否（fail-closed）、開発環境 or `ALLOW_UNAUTHENTICATED=1` のみ素通り
+  - **新規**: `lib/client-auth.ts` — クライアント側ヘルパー
+    - 初回のみ `prompt()` でパスワード取得 → `sessionStorage` に保持、`x-app-password` ヘッダー付与、401時は破棄して再入力
+  - **修正**: `app/api/knowledge/[id]/route.ts` — DELETE 冒頭で `isAuthorized()` チェック → 失敗時 401
+  - **修正**: `app/admin/knowledge/page.tsx` — 削除呼び出しに `authHeaders()` 付与、401 ハンドリング追加
+  - **対応した指摘**: Missing Authorization（HIGH）/ Fail-Open Authorization（MEDIUM）
+  - **運用上の留意**: 現状ローカル環境のみ運用。`.env.local` の `APP_PASSWORD` は設定済みのため、ローカルでも削除時にパスワード入力が必要。Vercel等にデプロイする際は環境変数に `APP_PASSWORD` を登録すること（未設定だと本番では削除が401で拒否される）
+  - 検証: `npx tsc --noEmit` 成功 / 3コミットを push 済み（`3371fef` → `64bff74` → `526391a`）
+
 ## 未着手
 
 - [ ] Step 8-j: マイグレーション 006 の手動実行（川嶋）
@@ -360,7 +383,8 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
   - 川嶋さん側で5社×2ヶ月分（計10ケース）の入力が揃ってから着手
 - [ ] Step 9: Vercelデプロイ
   - Vercelプロジェクト作成
-  - 環境変数設定（SUPABASE_URL, SUPABASE_ANON_KEY, GEMINI_API_KEY）
+  - 環境変数設定（SUPABASE_URL, SUPABASE_ANON_KEY, GEMINI_API_KEY, **APP_PASSWORD**）
+    - ⚠️ `APP_PASSWORD` 未設定だと本番では削除APIが401で拒否される（fail-closed）。認証なしで運用する場合のみ `ALLOW_UNAUTHENTICATED=1`（非推奨）
   - デプロイ確認
 - [ ] Step 10: 過去データ14ヶ月分をナレッジDBへ一括投入
   - 過去レポートのExcelデータ準備
@@ -377,4 +401,5 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 
 - Supabaseプロジェクト: `sfgunchibzhtpsaldffu`（ap-northeast-1）
 - Geminiモデル: `gemini-2.5-flash`
-- 環境変数: `.env.local` に設定済み（`.env.local.example` はテンプレート）
+- 環境変数: `.env.local` に設定済み（`.env.local.example` はテンプレート）。`APP_PASSWORD`（削除API認証）/ `ALLOW_UNAUTHENTICATED`（本番で認証無効化したい場合のみ=1）を含む
+- GitHub: `https://github.com/kaiseikawashima-hash/reportAIrecent`（`main` ブランチ）
