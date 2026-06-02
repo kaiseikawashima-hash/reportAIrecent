@@ -64,6 +64,9 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 - 保存: 同一 client_id+year_month は既存削除→INSERT（UPSERT）で重複登録を再発防止。保存系は APP_PASSWORD 認証
 - グラフ: recharts（折れ線/棒/ドーナツ）。3点未満は「データ蓄積中」表示、欠月スキップ
 - 手打ち入力: 推移グラフ用12項目のみ。`/admin` モーダルとレポート画面の2か所
+- **追補（同日）**: 複数月入りExcel（例: kyouwa 2025/01〜2026/06 の17ヶ月分）の過去月一括登録に対応
+  - 背景: `/admin/knowledge/import` のExcelモードは当月1レコードしか保存しない（過去16ヶ月分は excel_parsed.monthly_trends に埋まったまま）→ 推移グラフに出ない
+  - 対応: `/admin/eval/report` でExcel解析後、推移データに過去月があれば「過去Nヶ月分を一括登録」ボタンを表示。`monthlyTrendsToManualEntries()`（lib/report/kpi-history.ts）で monthly_trends→12キーに変換し、既存の `/api/report-builder/manual-kpi` へ送る（当月は除外。既存月は12項目のみマージ上書きで考察は壊さない）
 - コミット: `8618ecd` → `4822935` → `a572356` → `2151bee`（**未push**）
 
 ### 既知の運用課題（次セッション以降で対応想定）

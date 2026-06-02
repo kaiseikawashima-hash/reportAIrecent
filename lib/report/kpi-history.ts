@@ -3,7 +3,12 @@
 // 推移グラフ・KPI推移表用のデータを組み立てるヘルパー
 // ==========================================
 
-import type { KpiHistoryPoint, TrendKpiKey } from "@/lib/report/types";
+import type { MonthlyTrend } from "@/lib/types";
+import type {
+  KpiHistoryPoint,
+  ManualKpiEntry,
+  TrendKpiKey,
+} from "@/lib/report/types";
 
 /**
  * jsonb の kpi_summary から数値を安全に取り出す。
@@ -111,6 +116,44 @@ export function computeNetIncrease(
     }
   }
   return result;
+}
+
+/**
+ * Excel の monthly_trends（複数月入りエクスポート）を
+ * 手打ち入力APIと同じ ManualKpiEntry[] へ変換する。
+ * - 12キーは MonthlyTrend と1対1対応（view_total→view 等）
+ * - excludeMonth（通常は当月。レポート保存側で完全な kpi_summary が入るため）を除外
+ * - 同一月が複数行ある場合は後の行を採用
+ */
+export function monthlyTrendsToManualEntries(
+  trends: MonthlyTrend[],
+  excludeMonth?: string
+): ManualKpiEntry[] {
+  const byMonth = new Map<string, ManualKpiEntry>();
+  for (const t of trends) {
+    if (!/^\d{4}\/(0[1-9]|1[0-2])$/.test(t.year_month)) continue;
+    if (excludeMonth && t.year_month === excludeMonth) continue;
+    byMonth.set(t.year_month, {
+      year_month: t.year_month,
+      values: {
+        follower: t.follower,
+        view: t.view_total,
+        view_reel: t.view_reel,
+        view_feed: t.view_feed,
+        reach: t.reach_total,
+        reach_reel: t.reach_reel,
+        reach_feed: t.reach_feed,
+        engagement: t.engagement_total,
+        engagement_reel: t.engagement_reel,
+        engagement_feed: t.engagement_feed,
+        profile_access: t.profile_access,
+        link_clicks: t.link_clicks,
+      },
+    });
+  }
+  return [...byMonth.values()].sort((a, b) =>
+    a.year_month.localeCompare(b.year_month)
+  );
 }
 
 /** a が b の直前月（"2026/02" → "2026/03"）かを判定 */
