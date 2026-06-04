@@ -299,9 +299,11 @@ export default function ReportBuilderPage() {
         throw new Error(body.error ?? "保存に失敗しました");
       }
       const data = await res.json();
+      const dupNote =
+        data.deleted_count > 0 ? `・重複${data.deleted_count}件を統合` : "";
       setSaveMessage(
-        data.replaced
-          ? `保存しました（${targetMonthSlash} の既存レコード${data.deleted_count}件を置き換え）`
+        data.action === "updated"
+          ? `保存しました（${targetMonthSlash} の既存レコードへ上書きマージ${dupNote}）`
           : `保存しました（${targetMonthSlash} 新規）`
       );
       await fetchHistory(clientId);

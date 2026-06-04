@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
 import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
+import { upsertKnowledgeRow } from "@/lib/report/knowledge-upsert";
 
 // ==========================================
-// Phase 4a: レポート保存 API（UPSERT）
-// 同一 client_id + year_month の既存レコードを削除してから INSERT し、
-// 重複登録（例: ノコス2026/03 が2件入っていた問題）の再発を防ぐ。
-// ※ /api/knowledge POST（本番の追記型保存）は変更せずそのまま残す
+// Phase 4a2: レポート保存 API（マージ UPSERT に統一）
+// 同一 client_id + year_month は upsertKnowledgeRow で1レコードへ収束させる。
+// - report_text 付きの保存 → 当月の数値・デモグラ・本文を更新
+// - 過去に手打ちで入れた推移数値（別月レコード）はそのまま保持される
+// ※ 重複INSERT（例: ノコス2026/03）の再発防止。/api/knowledge POST と共通ロジック。
 // ==========================================
 
 export async function POST(request: NextRequest) {
@@ -45,44 +46,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 既存レコードを削除（UPSERT: 重複INSERT防止）
-    // best_practices は ON DELETE CASCADE で連動削除される
-    const { data: deleted, error: deleteErr } = await supabase
-      .from("knowledge_base")
-      .delete()
-      .eq("client_id", client_id)
-      .eq("year_month", year_month)
-      .select("id");
+    const result = await upsertKnowledgeRow({
+      client_id,
+      year_month,
+      fmt_version,
+      kpi_summary: kpi_summary ?? {},
+      top_posts: top_posts ?? {},
+      excel_parsed: excel_parsed ?? {},
+      report_text,
+    });
 
-    if (deleteErr) {
-      return NextResponse.json(
-        { error: `既存レコードの削除に失敗しました: ${deleteErr.message}` },
-        { status: 500 }
-      );
-    }
-
-    const { data, error } = await supabase
-      .from("knowledge_base")
-      .insert({
-        client_id,
-        year_month,
-        fmt_version,
-        kpi_summary: kpi_summary ?? {},
-        top_posts: top_posts ?? {},
-        excel_parsed: excel_parsed ?? {},
-        report_text,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    const deletedCount = deleted?.length ?? 0;
+    // 既存レコードを更新した、または重複を削除した場合は「置き換え」扱いで表示する
+    const replaced = result.action === "updated";
+    const deletedCount = result.deleted_count;
     return NextResponse.json(
-      { ...data, replaced: deletedCount > 0, deleted_count: deletedCount },
-      { status: 201 }
+      {
+        id: result.id,
+        action: result.action,
+        replaced,
+        deleted_count: deletedCount,
+      },
+      { status: result.action === "created" ? 201 : 200 }
     );
   } catch (error) {
     const message =

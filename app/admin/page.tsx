@@ -7,6 +7,7 @@ import ManualKpiEditor, {
   manualRowsToEntries,
   type ManualKpiRow,
 } from "@/components/report/ManualKpiEditor";
+import ClientKpiManager from "@/components/report/ClientKpiManager";
 import { authHeaders, clearAppPassword } from "@/lib/client-auth";
 
 interface ClientForm {
@@ -286,6 +287,7 @@ export default function AdminPage() {
       {modal && (
         <ClientFormModal
           mode={modal.kind}
+          editClientId={modal.kind === "edit" ? modal.id : undefined}
           form={form}
           setForm={setForm}
           saving={saving}
@@ -358,6 +360,7 @@ function ClientCard({ client, onEdit }: { client: Client; onEdit: () => void }) 
 
 interface ModalProps {
   mode: "create" | "edit";
+  editClientId?: string;
   form: ClientForm;
   setForm: (updater: (prev: ClientForm) => ClientForm) => void;
   saving: boolean;
@@ -373,6 +376,7 @@ interface ModalProps {
 
 function ClientFormModal({
   mode,
+  editClientId,
   form,
   setForm,
   saving,
@@ -395,7 +399,7 @@ function ClientFormModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-2xl my-8"
+        className="bg-white rounded-xl shadow-xl w-full max-w-4xl my-8"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-4 border-b flex items-center justify-between">
@@ -511,23 +515,36 @@ function ClientFormModal({
             )}
           </div>
 
-          {/* Phase 4a: 過去月数値の初期入力（推移グラフ用・任意） */}
-          <details className="border rounded-lg">
-            <summary className="px-3 py-2 text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg">
-              過去月数値の初期入力（推移グラフ用・任意）
-            </summary>
-            <div className="px-3 pb-3 space-y-2">
-              <p className="text-[11px] text-gray-500">
-                フォロワー・ビュー・リーチ等の過去月数値を入力すると、レポート画面の推移グラフに反映されます。
-                保存ボタンでクライアントと一緒に保存されます
-              </p>
-              <ManualKpiEditor
-                rows={manualRows}
-                onChange={onManualRowsChange}
-                disabled={saving || generating}
-              />
-            </div>
-          </details>
+          {/* Phase 4a2: 過去月数値の初期セットアップ（Excel一括取り込み + 一覧 + 手打ち補完） */}
+          {mode === "edit" && editClientId ? (
+            <details className="border rounded-lg" open>
+              <summary className="px-3 py-2 text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg">
+                過去月数値の取り込み・一覧編集（推移グラフ用）
+              </summary>
+              <div className="px-3 pb-3 pt-1">
+                <ClientKpiManager clientId={editClientId} />
+              </div>
+            </details>
+          ) : (
+            <details className="border rounded-lg">
+              <summary className="px-3 py-2 text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-50 rounded-lg">
+                過去月数値の初期入力（推移グラフ用・任意）
+              </summary>
+              <div className="px-3 pb-3 space-y-2">
+                <p className="text-[11px] text-gray-500">
+                  フォロワー・ビュー・リーチ等の過去月数値を入力すると、レポート画面の推移グラフに反映されます。
+                  保存ボタンでクライアントと一緒に保存されます。
+                  <br />
+                  ※ 複数月入り Excel からの一括取り込みは、クライアントを保存したあと「編集」から利用できます。
+                </p>
+                <ManualKpiEditor
+                  rows={manualRows}
+                  onChange={onManualRowsChange}
+                  disabled={saving || generating}
+                />
+              </div>
+            </details>
+          )}
           {manualError && (
             <p className="text-xs text-red-600">⚠ {manualError}</p>
           )}

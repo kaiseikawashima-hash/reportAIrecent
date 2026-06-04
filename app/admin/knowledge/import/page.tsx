@@ -284,9 +284,29 @@ export default function KnowledgeImportPage() {
       </header>
 
       <div className="max-w-3xl mx-auto py-8 px-4">
+        {/* Phase 4a2: 役割分担の導線 */}
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          <p className="font-medium">この画面は「毎月の当月データ登録用」です</p>
+          <p className="mt-1">
+            当月の数値（Excel または手動）＋ 過去レポート本文を 1 ヶ月分ずつ登録します。
+            <br />
+            新規クライアントの初期設定で
+            <span className="font-medium">過去数十ヶ月分をまとめて取り込む</span>
+            場合は{" "}
+            <Link
+              href="/admin"
+              className="font-medium text-blue-700 underline hover:text-blue-900"
+            >
+              クライアント管理画面
+            </Link>{" "}
+            の「過去月数値の取り込み・一覧編集」から行ってください。
+          </p>
+        </div>
+
         <div className="bg-white rounded-xl shadow-sm border p-6">
           <p className="text-sm text-gray-600 mb-6">
-            運用開始時の過去レポートをナレッジDBへ手動で登録します。連続入力できます。
+            当月の過去レポート（考察テキスト）と数値をナレッジDBへ登録します。連続入力できます。
+            同じクライアント・年月の既存レコードには数値・本文がマージ保存されます（重複しません）。
           </p>
 
           {/* 入力モード切替 */}
@@ -387,7 +407,14 @@ export default function KnowledgeImportPage() {
                     <p className="text-[11px] text-blue-800">
                       一括登録すると月別レコードとして保存され、レポート画面のKPI推移表・推移グラフに反映されます。
                       既に存在する月は推移用12項目だけが上書きされます（考察テキスト・デモグラフィックは変更されません）。
-                      当月（{excelData.target_month}）は下のフォームから考察つきで登録してください
+                      当月（{excelData.target_month}）は下のフォームから考察つきで登録してください。
+                    </p>
+                    <p className="text-[11px] text-amber-700">
+                      ※ 初期セットアップでの過去一括取り込みは、
+                      <Link href="/admin" className="underline hover:text-amber-900">
+                        クライアント管理画面
+                      </Link>
+                      （取り込み後にセル単位で手打ち補完できます）を推奨します。
                     </p>
                     <details>
                       <summary className="text-[11px] text-blue-800 cursor-pointer hover:underline">

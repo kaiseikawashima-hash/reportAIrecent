@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { upsertKnowledgeRow } from "@/lib/report/knowledge-upsert";
 
 // ==========================================
 // GET: 過去レポート参照
@@ -85,25 +86,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data, error } = await supabase
-      .from("knowledge_base")
-      .insert({
-        client_id,
-        year_month,
-        fmt_version,
-        kpi_summary: kpi_summary ?? {},
-        top_posts: top_posts ?? {},
-        excel_parsed: excel_parsed ?? {},
-        report_text,
-      })
-      .select()
-      .single();
+    // マージ upsert に統一（同一 client_id × year_month は1レコードへ収束）
+    const result = await upsertKnowledgeRow({
+      client_id,
+      year_month,
+      fmt_version,
+      kpi_summary: kpi_summary ?? {},
+      top_posts: top_posts ?? {},
+      excel_parsed: excel_parsed ?? {},
+      report_text,
+    });
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(
+      {
+        id: result.id,
+        action: result.action,
+        deleted_count: result.deleted_count,
+      },
+      { status: result.action === "created" ? 201 : 200 }
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "ナレッジ保存中にエラーが発生しました";
     return NextResponse.json({ error: message }, { status: 500 });

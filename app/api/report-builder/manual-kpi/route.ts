@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
 import { TREND_KPI_KEYS, type TrendKpiKey } from "@/lib/report/types";
+import { upsertKnowledgeRow } from "@/lib/report/knowledge-upsert";
 
 // ==========================================
-// Phase 4a: 過去月数値の手打ち入力 API
+// Phase 4a / 4a2: 過去月数値の手打ち・一括入力 API
 // 推移グラフに必要な数値（monthly_trends 相当）だけを
 // knowledge_base.kpi_summary に保存する。
-// - 既存月: kpi_summary に入力キーのみマージ更新（最新 created_at の行）
-// - 新規月: report_text=null のレコードを INSERT（数値のみの月）
+// 保存は共通の upsertKnowledgeRow（マージ upsert）に統一:
+// - 既存月: kpi_summary に入力キーのみマージ（report_text / top_posts / デモグラは保持）
+// - 新規月: report_text=null のレコードを作成（数値のみの月）
+// - 同一月の重複レコードは1件へ収束
 // ==========================================
 
 const YEAR_MONTH_RE = /^\d{4}\/(0[1-9]|1[0-2])$/;
@@ -90,58 +93,21 @@ export async function POST(request: NextRequest) {
     const results: Array<{ year_month: string; action: "updated" | "created" }> = [];
 
     for (const entry of parsed.entries) {
-      // 既存レコード（重複月は最新 created_at を採用）
-      const { data: existing, error: selectErr } = await supabase
-        .from("knowledge_base")
-        .select("id, kpi_summary")
-        .eq("client_id", clientId)
-        .eq("year_month", entry.year_month)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (selectErr) {
-        return NextResponse.json(
-          { error: `${entry.year_month}: 既存レコードの確認に失敗しました（${selectErr.message}）`, results },
-          { status: 500 }
-        );
-      }
-
-      if (existing) {
-        const mergedKpi = {
-          ...((existing.kpi_summary as Record<string, unknown> | null) ?? {}),
-          ...entry.values,
-        };
-        const { error: updateErr } = await supabase
-          .from("knowledge_base")
-          .update({ kpi_summary: mergedKpi })
-          .eq("id", existing.id);
-
-        if (updateErr) {
-          return NextResponse.json(
-            { error: `${entry.year_month}: 更新に失敗しました（${updateErr.message}）`, results },
-            { status: 500 }
-          );
-        }
-        results.push({ year_month: entry.year_month, action: "updated" });
-      } else {
-        const { error: insertErr } = await supabase.from("knowledge_base").insert({
+      try {
+        // 数値だけのマージ upsert（report_text は渡さない＝既存本文を保持）
+        const result = await upsertKnowledgeRow({
           client_id: clientId,
           year_month: entry.year_month,
           fmt_version: fmtVersion,
           kpi_summary: entry.values,
-          top_posts: {},
-          excel_parsed: {},
-          report_text: null,
         });
-
-        if (insertErr) {
-          return NextResponse.json(
-            { error: `${entry.year_month}: 登録に失敗しました（${insertErr.message}）`, results },
-            { status: 500 }
-          );
-        }
-        results.push({ year_month: entry.year_month, action: "created" });
+        results.push({ year_month: entry.year_month, action: result.action });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "保存に失敗しました";
+        return NextResponse.json(
+          { error: `${entry.year_month}: ${msg}`, results },
+          { status: 500 }
+        );
       }
     }
 
