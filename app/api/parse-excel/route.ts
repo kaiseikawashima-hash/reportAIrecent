@@ -9,6 +9,7 @@ import type {
   Demographics,
   AgeGender,
   RegionData,
+  DailyAccount,
 } from "@/lib/types";
 
 // ==========================================
@@ -116,6 +117,38 @@ function formatYearMonth(v: unknown): string {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
     return `${y}/${m}`;
+  }
+  return "";
+}
+
+/**
+ * 日付セルを "YYYY/MM/DD" に正規化。失敗時は空文字。
+ * 日別シートの日付は文字列 "2026-05-01" 形式（Date/Excelシリアルにも一応対応）。
+ */
+function formatDay(v: unknown): string {
+  if (v == null || v === "") return "";
+  if (v instanceof Date) {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, "0");
+    const d = String(v.getDate()).padStart(2, "0");
+    return `${y}/${m}/${d}`;
+  }
+  if (typeof v === "number") {
+    if (v > 30000 && v < 80000) {
+      const date = new Date((v - 25569) * 86400 * 1000);
+      if (!Number.isNaN(date.getTime())) {
+        const y = date.getUTCFullYear();
+        const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+        const d = String(date.getUTCDate()).padStart(2, "0");
+        return `${y}/${m}/${d}`;
+      }
+    }
+    return "";
+  }
+  const s = String(v).trim();
+  const match = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
+  if (match) {
+    return `${match[1]}/${match[2].padStart(2, "0")}/${match[3].padStart(2, "0")}`;
   }
   return "";
 }
@@ -331,6 +364,39 @@ function parseDemographics(wb: XLSX.WorkBook): Demographics {
 }
 
 // ==========================================
+// 7. アカウント分析-日別クリック集計（当月の日別プロフィールアクセス/リンククリック）
+// 横持ち固定: [No., 日付, プロフィールクリック, （以降=リンク系クリック列・件数可変）]
+// - profile_access = プロフィールクリック（列2）
+// - link_clicks   = 列3以降の合計（Webサイト/電話/位置情報/Eメール/テキスト等）
+//   ※ ホーム-推移データの「リンククリック」月次値と一致する（プロフィール以外の合計）
+// シートが無い/空の月は [] を返す（落とさない）
+// ==========================================
+
+function parseDailyAccount(wb: XLSX.WorkBook): DailyAccount[] {
+  const rows = rowsOf(wb, "アカウント分析-日別クリック集計");
+  if (rows.length < 2) return [];
+
+  const out: DailyAccount[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i] ?? [];
+    const date = formatDay(row[1]);
+    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date)) continue;
+
+    let linkClicks = 0;
+    for (let c = 3; c < row.length; c++) {
+      linkClicks += num(row[c]);
+    }
+
+    out.push({
+      date,
+      profile_access: num(row[2]),
+      link_clicks: linkClicks,
+    });
+  }
+  return out;
+}
+
+// ==========================================
 // メインハンドラ
 // ==========================================
 
@@ -375,6 +441,7 @@ export async function POST(request: NextRequest) {
     const feedPosts = parsePosts(wb, "投稿分析-フィード");
     const reelPosts = parsePosts(wb, "投稿分析-リール");
     const demographics = parseDemographics(wb);
+    const dailyAccount = parseDailyAccount(wb);
 
     // post_count が 0 で投稿明細が取れている場合はそれを採用
     if (summary.post_count === 0) {
@@ -396,6 +463,7 @@ export async function POST(request: NextRequest) {
       feed_posts: feedPosts,
       reel_posts: reelPosts,
       demographics,
+      daily_account: dailyAccount,
       target_month: targetMonth,
     };
 

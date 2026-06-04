@@ -201,6 +201,12 @@ export default function ReportBuilderPage() {
     [windowedPoints]
   );
 
+  // §3: アカウント分析の前月比用。対象月の直前の存在月（= 前月レコードの kpi_summary）
+  const prevAccountPoint = useMemo(() => {
+    const idx = windowedPoints.findIndex((p) => p.year_month === targetMonthSlash);
+    return idx > 0 ? windowedPoints[idx - 1] : null;
+  }, [windowedPoints, targetMonthSlash]);
+
   // ------------------------------------------
   // AI考察生成（4セクション順次・エラー時はスキップして次へ）
   // ------------------------------------------
@@ -542,7 +548,12 @@ export default function ReportBuilderPage() {
               onTextChange={(next) => setTexts((prev) => ({ ...prev, account: next }))}
               errorMessage={sectionErrors.account}
             >
-              <AccountSection rows={trendRows} currentKpi={currentKpi} />
+              <AccountSection
+                currentKpi={currentKpi}
+                prevKpi={prevAccountPoint?.kpi ?? null}
+                prevMonth={prevAccountPoint?.year_month ?? null}
+                daily={excelParsed?.daily_account ?? []}
+              />
             </SectionCard>
 
             {/* 保存 */}

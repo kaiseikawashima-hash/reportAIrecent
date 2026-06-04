@@ -77,6 +77,13 @@ export interface Demographics {
   cities: RegionData[];
 }
 
+// Phase 4a4: 当月の日別アカウント数値（アカウント分析の日別折れ線用）
+export interface DailyAccount {
+  date: string; // "YYYY/MM/DD"
+  profile_access: number; // プロフィールクリック
+  link_clicks: number; // リンク系クリック合計（Web/電話/位置情報/Eメール/テキスト等）
+}
+
 export interface ExcelParseResult {
   summary: ExcelSummary;
   monthly_trends: MonthlyTrend[];
@@ -85,6 +92,7 @@ export interface ExcelParseResult {
   feed_posts: PostDetail[];
   reel_posts: PostDetail[];
   demographics: Demographics;
+  daily_account: DailyAccount[];
   target_month: string;
 }
 

@@ -24,6 +24,7 @@ import {
 import type { TrendChartRow } from "@/lib/report/kpi-history";
 import { countDataPoints } from "@/lib/report/kpi-history";
 import type { TrendKpiKey } from "@/lib/report/types";
+import type { DailyAccount } from "@/lib/types";
 
 export const CHART_COLORS = [
   "#2563eb", // blue-600
@@ -176,6 +177,62 @@ export function TrendBarChart({
           />
         ))}
       </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ------------------------------------------
+// 日別折れ線（当月のアカウント分析: プロフィールアクセス / リンククリック）
+// X軸 = 当月の日付（1〜末日）、線2本。月次推移とは別物。
+// ------------------------------------------
+
+export function DailyAccountLineChart({
+  data,
+  height = 260,
+}: {
+  data: DailyAccount[];
+  height?: number;
+}) {
+  if (data.length === 0) {
+    return (
+      <div className="border border-dashed border-gray-300 rounded-lg bg-gray-50 px-4 py-6 text-center">
+        <p className="text-sm text-gray-500 font-medium">日別データなし</p>
+        <p className="text-xs text-gray-400 mt-1">
+          当月Excelに「アカウント分析-日別クリック集計」シートがある月で表示されます
+        </p>
+      </div>
+    );
+  }
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+        <XAxis
+          dataKey="date"
+          tick={{ fontSize: 10 }}
+          interval="preserveStartEnd"
+          tickFormatter={(v: string) => String(v).split("/").pop() ?? v}
+        />
+        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => v.toLocaleString()} />
+        <Tooltip formatter={(value) => formatNumber(value)} />
+        <Legend wrapperStyle={{ fontSize: 12 }} />
+        <Line
+          type="monotone"
+          dataKey="profile_access"
+          name="プロフィールアクセス"
+          stroke={CHART_COLORS[0]}
+          strokeWidth={2}
+          dot={{ r: 2 }}
+        />
+        <Line
+          type="monotone"
+          dataKey="link_clicks"
+          name="リンククリック"
+          stroke={CHART_COLORS[1]}
+          strokeWidth={2}
+          dot={{ r: 2 }}
+        />
+      </LineChart>
     </ResponsiveContainer>
   );
 }
