@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { isAuthorized, unauthorizedResponse } from "@/lib/auth";
 import { callGemini } from "@/lib/gemini";
 import type { GeminiMessage } from "@/lib/gemini";
 import type { ClientPlan, DiffCalcResult, ExcelParseResult } from "@/lib/types";
@@ -74,6 +75,10 @@ async function extractGeminiText(response: Response): Promise<string> {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isAuthorized(request)) {
+    return unauthorizedResponse();
+  }
+
   try {
     const body = await request.json();
     const {
