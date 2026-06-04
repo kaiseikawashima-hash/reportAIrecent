@@ -1,31 +1,65 @@
 # SNSレポート生成アプリ - 進捗チェックリスト
 
-## 🔜 次回の再開ポイント（2026-06-02 時点）
+## 🔜 次回の再開ポイント（2026-06-04 時点）
 
-**現在地**: Phase 4a（アプリ内完結レポート作成画面の基盤）実装完了 + 追補2件（複数月Excelの過去月一括登録 → import画面へ移設）。ビルド/型/lint 検証済み。**川嶋さんの実機動作確認がまだ**。
+**現在地**: Phase 4a6 まで実装完了 → 全4セクションが FMT 準拠に揃った。ビルド/型/lint 検証済み。
+**4a2〜4a5 は push 済み（origin/main = `3c5490e`）。4a6 の2コミット（`89dbf37` 本体 / `0c596b9` セキュリティ修正）が未push** で、**川嶋さんの実機動作確認待ち**。
 
-**画面の役割分担（確定）**:
-- `/admin/knowledge/import` = **初期設定**（考察つき過去レポート投入 + 複数月Excelの過去月数値一括登録）
-- `/admin/eval/report` = **毎月の運用**（当月Excelのみ。過去分は投入済み前提で推移グラフに自動反映）
+**全4セクションの FMT 準拠状況**:
+- 【1】サマリー … 4a6（指標/目標/実績/前月比/要因/次月対策の5列。目標=手入力、要因/次月対策=AI生成+手編集）
+- 【2】フォロワー分析 … 推移グラフ（直近13ヶ月）+ ドーナツ。年齢ピラミッドは 4b
+- 【3】リーチ分析 … 4a5（フィード/リール別「先月/当月/前月比」テーブル + 月次推移 + 当月投稿一覧）
+- 【4】アカウント分析 … 4a4（先月vs当月比較テーブル + 当月の日別折れ線）
 
-次回はここから（`npm run dev` で確認）:
-1. **初期設定の確認**（ http://localhost:3000/admin/knowledge/import → Excelモード）
-   - キョウワホームを選択 → 17ヶ月Excel（`analytics_export_kyouwa.home_202501_202606.xlsx`）をアップロード
-   - 青パネル「📊 推移データに過去16ヶ月分…」→ 確認表で数値チェック →「一括登録」
-   - APP_PASSWORD の入力プロンプトが出る（`.env.local` の値を入力）
-2. **毎月運用の確認**（ http://localhost:3000/admin/eval/report ）
-   - キョウワホームを選択 → ①で投入した過去月がKPI推移表・推移グラフ（折れ線）に出るか
-   - 当月Excelアップロード → ドーナツ/投稿一覧の表示 → 「考察を生成」（4セクション順次生成）
-   - 考察を編集 → 「レポートを保存」 → 推移表へ当月反映 / 同月再保存で重複しないか
-   - 過去月数値の手打ち入力（レポート画面下部の折りたたみ + `/admin` クライアントモーダル内）
-3. **GitHub へ push**（Phase 4a 一式 `8618ecd`〜`d227c32` + docs が未push）→「pushして」でOK
-4. 動作確認で問題なければ **Phase 4b**（AI Pro/Notion風デザイン・年齢ピラミッド等）または運用準備（Step 9 デプロイ / Step 10 過去データ投入）へ
+**画面の役割分担（確定・4a2で再徹底）**:
+- `/admin/knowledge/import` = **毎月運用**（当月の数値 + 過去レポート本文を1ヶ月ずつ登録）
+- `/admin`（クライアント編集モーダル） = **初期セットアップ**（複数月Excel一括取り込み + 確認表セル手打ち補完 + 登録済み月次一覧編集）
+- `/admin/eval/report` = レポート作成本体（当月Excel → グラフ/テーブル自動 + AI考察 → 保存）
 
-実装内容の詳細は「完了済み > Phase 4a」と「リリースノート > Phase 4a（追補含む）」を参照。設計判断（新規ルート採用 / is_activeプロンプト自動選択 / 一括登録のimport画面移設）もそこに記載。
+次回はここから:
+1. **4a6 のブラウザ通し確認**（`npm run dev` → `/admin/eval/report`）
+   - サマリー指標テーブルが6列（指標/目標/実績/前月比/要因/次月対策）になるか
+   - 目標を入力→「目標・要因・対策を保存」→再読込で保持／目標だけ保存で考察・数値が壊れないか
+   - 「要因・次月対策をAI生成」→下書き挿入→手編集→保存→再読込で保持
+   - キョウワ 2026/05 で 4a4（日別折れ線・先月比表）/ 4a5（リーチ比較表）も合わせて確認
+2. **OK なら push**（`89dbf37` + `0c596b9`）→「pushして」でOK
+3. **要対応（要判断）**: `generate-section`（4セクション考察生成）も Gemini 課金を伴うのに未認可。`summary-metrics`（4a6で認可済み）と同様に `isAuthorized` ゲートを付けるか要判断（クライアント側 `handleGenerate` への `authHeaders()` 付与もセット）。本番 `/api/generate-report` の扱いも合わせて検討
+4. その後は **Phase 4b**（デザイン作り込み・年齢ピラミッド）/ Step 9 デプロイ / Step 10 過去データ投入
+
+実装詳細は「リリースノート > 2026-06-04 Phase 4a2〜4a6」を参照。
 
 ---
 
-## 直近のリリースノート（2026-05-21 〜 2026-06-02）
+## 直近のリリースノート（2026-05-21 〜 2026-06-04）
+
+### 2026-06-04 — Phase 4a2〜4a6: レポート構造をFMT準拠に揃える
+Phase 4a の基盤の上に、重複防止・初期セットアップ動線・全4セクションのFMT準拠化を順次実装。各フェーズはビルド/型/lint 検証済み。4a2〜4a5 は push 済み、4a6 は push 待ち（実機確認後）。
+
+**Phase 4a2 — 重複防止 upsert + 初期セットアップ動線**（コミット `ba77d05`・push済）
+- **核心**: `lib/report/knowledge-upsert.ts`（新規）を全保存経路の共通入口に。`client_id × year_month` をキーに「渡されたフィールドだけ上書き・未指定は既存保持」のマージ upsert。`kpi_summary` はキー単位マージ、`report_text`/`top_posts`/`excel_parsed` は非空時のみ上書き、`fmt_version` はレポート本文を伴う保存時のみ更新。同一月の重複レコードは最新を基準に1件へ収束（残り削除）
+- 統一した経路: `/api/knowledge` POST（素のINSERT→マージupsert＝import/本番自動保存の重複バグ解消）/ `/api/report-builder/save`（削除→INSERT→マージupsert）/ `manual-kpi`（共通ヘルパーへ）
+- **管理画面**: `components/report/ClientKpiManager.tsx`（新規）— 編集モーダルに複数月Excel一括取り込み + 確認表のセル単位手打ち補完 + 登録済み月次一覧編集を1グリッドで提供。新規作成時は従来の `ManualKpiEditor`
+- **import画面**: 「毎月の当月データ登録用」と明示、過去一括取り込みは管理画面へ誘導（一括機能は残置）
+
+**Phase 4a3 — 推移グラフ範囲絞り込み + ナレッジ一覧フィルタ**（コミット `f08c142`・push済）
+- `lib/report/kpi-history.ts` に `windowByTargetMonth`/`monthIndex` 追加。対象月を終点に直近13ヶ月（対象月+過去12ヶ月）へ絞り、未来月除外・範囲内の存在月のみ描画（欠月スキップ）。KPI推移表・フォロワー/ビュー・リーチ/プロフアクセス・リンククリックの推移系すべてに適用。当月実績テーブルの前月比は前月行が範囲内に残るため不変
+- `/admin/knowledge`: 「レポートあり / すべて表示」フィルタ追加（デフォルト=レポートあり）。数値のみレコード（report_text空）は「すべて表示」時のみ・淡色+破線+「数値のみ」バッジで区別。データは不変
+
+**Phase 4a4 — アカウント分析をFMT準拠に**（コミット `726263a`・push済）
+- §1 日別パース追加: `lib/types.ts` に `DailyAccount`/`ExcelParseResult.daily_account`、`parse-excel` に `parseDailyAccount`（シート「アカウント分析-日別クリック集計」を固定カラム読み。profile_access=プロフィールクリック、link_clicks=列3以降の合計＝月次「リンククリック」と一致。日付は `YYYY/MM/DD` 正規化、欠シートは `[]`）。協和2026/05 で31日分・sumProfile=1589/sumLink=20 を実Excelで確認
+- §2 `charts.tsx` に `DailyAccountLineChart` 追加。月次13ヶ月推移折れ線を廃止 → 当月の日別折れ線（2本）へ置換
+- §3 先月vs当月の比較テーブル追加（プロフィールアクセス/リンククリックの当月/前月/前月比。前月値は直前存在月から、無ければN/A）
+
+**Phase 4a5 — リーチ分析に先月/当月/前月比テーブル**（コミット `3c5490e`・push済）
+- `ReachSection` に「3-1 フィード」「3-2 リール」比較テーブル（5指標=平均ビュー/リーチ/いいね/保存/ENG率 × 先月/当月/前月比）。当月=当月投稿明細の平均、先月=前月レコードの `excel_parsed` から算出。実数は%、ENG率のみ pt差。前月なしN/A
+- `lib/report/post-metrics.ts`（新規 `averagePostMetrics`/`extractPosts`）、`kpi-history.ts` に `prevYearMonth`、`app/api/report-builder/prev-posts`（新規・前月の投稿明細を返す）
+- 月次推移グラフ（直近13ヶ月）・当月投稿一覧は残置
+
+**Phase 4a6 — サマリー指標テーブルを5列構成に**（コミット `89dbf37` + `0c596b9`・**未push**）
+- `SummarySection` の当月実績テーブルを 指標/目標/実績/前月比/要因/次月対策 に拡張。`lib/report/summary-metrics.ts`（新規・指標定義 + goals/factors/next_actions 正規化）
+- §2 目標=手入力。`app/api/report-builder/summary-meta`（新規）で `kpi_summary.goals/factors/next_actions` のみマージ upsert（report_text を渡さず本文・数値・デモグラ・fmt_version を保持）
+- §3 要因/次月対策=AI生成+手編集。`app/api/report-builder/summary-metrics`（新規・指標別に `{factor, next_action}` を JSON 生成。当月数値/前月比/属性/運用メモを文脈に）。narrative な総括考察は従来の generate-section のまま。レポート保存時にも目標/要因/次月対策を kpi_summary に同梱
+- **セキュリティ修正（`0c596b9`）**: 自動レビュー指摘により `summary-metrics`（Gemini課金）に `isAuthorized` を追加、クライアント呼び出しに `authHeaders()`+401処理。※ `generate-section` も同種の未認可 → 次回判断（再開ポイント3参照）
 
 ### Phase 3.6 — 検証側の参照ロジック「過去レポ1件＋表現ナレッジ1件」化
 従来「同社過去6件＋他社ランダム4件 = 計10件」だった検証側の参照を、トークン削減目的で「直前月の正解レポート1件＋`best_practices` 1件 = 計2件」に変更。本番 `/api/generate-report` は無変更。
@@ -433,18 +467,22 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 
 ## 未着手
 
-- [ ] Phase 4a-検収: 実機動作確認 + GitHub push（川嶋）
-  - 手順は冒頭「🔜 次回の再開ポイント」参照（①import画面で過去月一括登録 → ②レポート画面で推移グラフ確認・生成・保存）
-  - 確認OK後に `git push` で `origin/main` へ反映（`8618ecd`〜`d227c32` + docs 一式）
+- [ ] Phase 4a6-検収: 実機動作確認 + push（川嶋）
+  - 手順は冒頭「🔜 次回の再開ポイント」参照（サマリー6列テーブル・目標保存・要因/次月対策AI生成）
+  - 確認OK後に `git push` で未push2コミット（`89dbf37` + `0c596b9`）を `origin/main` へ
+  - 4a2〜4a5 はpush済み（origin/main=`3c5490e`）
+- [ ] 要判断: `generate-section` の認可（セキュリティ）
+  - 4セクション考察生成も Gemini 課金を伴うが未認可（`summary-metrics` は4a6で認可済み）
+  - `isAuthorized` ゲート + クライアント `handleGenerate` への `authHeaders()` 付与を行うか、本番 `/api/generate-report` の扱いと合わせて判断
 - [ ] Phase 4b: デザイン作り込み + 特殊グラフ（7月予定）
   - AI Pro/Notion風の見た目調整
   - 男女別年齢ピラミッド
-  - サマリーの「各指標テーブル」に 目標/要因/次月対策 の編集列を追加（4aでは実績+前月比の自動表のみ）
+  - ~~サマリーの各指標テーブルに 目標/要因/次月対策 の編集列~~ → **4a6で完了**
 - [ ] Phase 4c: 周辺機能（8月以降）
   - 投稿サムネイル画像の表示・アップロード（既存の手動アップロード流用）
   - ナレッジ共有スライドの貼付欄
   - PDF/HTML エクスポート / 過去レポート閲覧UI強化
-  - 日別シートのパース追加（「アカウント分析-日別集計」「日別クリック集計」→ アカウントアクション折れ線）
+  - ~~日別シートのパース追加~~ → **4a4で完了**（アカウント分析の日別折れ線）
   - extractTitle のリール本文巻き込み修正（リール考察を始めるときに必須）
 - [ ] Step 8-j: マイグレーション 006 の手動実行（川嶋）
   - Supabase SQL Editor（`sfgunchibzhtpsaldffu`）で `006_eval_prompts_v16_seed.sql` を実行
