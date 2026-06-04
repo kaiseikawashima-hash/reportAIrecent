@@ -462,7 +462,7 @@ export default function ReportBuilderPage() {
     try {
       const res = await fetch("/api/report-builder/summary-metrics", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           client_id: clientId,
           year_month: targetMonthSlash,
@@ -471,6 +471,7 @@ export default function ReportBuilderPage() {
         }),
       });
       if (!res.ok) {
+        if (res.status === 401) clearAppPassword();
         const body = await res.json().catch(() => ({ error: "生成に失敗しました" }));
         throw new Error(body.error ?? "生成に失敗しました");
       }
