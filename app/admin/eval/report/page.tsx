@@ -8,12 +8,16 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import type { Client, ExcelParseResult, KpiSummary } from "@/lib/types";
+import type { Client, ExcelParseResult, KpiSummary, PostDetail } from "@/lib/types";
 import { excelToKpiSummary } from "@/lib/excel-to-kpi";
 import { SECTION_LABELS, type EvalSection } from "@/lib/eval/types";
 import type { KpiHistoryPoint } from "@/lib/report/types";
 import { TREND_KPI_KEYS } from "@/lib/report/types";
-import { buildTrendRows, windowByTargetMonth } from "@/lib/report/kpi-history";
+import {
+  buildTrendRows,
+  windowByTargetMonth,
+  prevYearMonth,
+} from "@/lib/report/kpi-history";
 
 // 推移グラフ・KPI推移表の表示範囲（対象月 + 過去12ヶ月 = 13ヶ月）
 const TREND_WINDOW_MONTHS = 13;
@@ -67,6 +71,14 @@ export default function ReportBuilderPage() {
 
   const [historyPoints, setHistoryPoints] = useState<KpiHistoryPoint[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
+
+  // §1(4a5): リーチ分析の「先月実績」用・前月レコードの投稿明細
+  const [prevPosts, setPrevPosts] = useState<{
+    feed: PostDetail[];
+    reel: PostDetail[];
+    month: string | null;
+    found: boolean;
+  }>({ feed: [], reel: [], month: null, found: false });
 
   const [texts, setTexts] = useState<SectionTexts>(EMPTY_TEXTS);
   const [statuses, setStatuses] = useState<SectionStatuses>(EMPTY_STATUSES);
@@ -171,6 +183,41 @@ export default function ReportBuilderPage() {
   // ------------------------------------------
 
   const targetMonthSlash = yearMonth ? yearMonth.replace("-", "/") : "";
+
+  // 前月レコードの投稿明細を取得（リーチ分析の先月実績列）
+  useEffect(() => {
+    if (!clientId || !targetMonthSlash) {
+      setPrevPosts({ feed: [], reel: [], month: null, found: false });
+      return;
+    }
+    const pm = prevYearMonth(targetMonthSlash);
+    if (!pm) {
+      setPrevPosts({ feed: [], reel: [], month: null, found: false });
+      return;
+    }
+    let cancelled = false;
+    fetch(
+      `/api/report-builder/prev-posts?client_id=${encodeURIComponent(
+        clientId
+      )}&year_month=${encodeURIComponent(pm)}`
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        setPrevPosts({
+          feed: Array.isArray(data?.feed_posts) ? data.feed_posts : [],
+          reel: Array.isArray(data?.reel_posts) ? data.reel_posts : [],
+          month: pm,
+          found: Boolean(data?.found),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setPrevPosts({ feed: [], reel: [], month: pm, found: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, targetMonthSlash]);
 
   const currentKpi: KpiSummary | null = useMemo(
     () => (excelParsed ? excelToKpiSummary(excelParsed) : null),
@@ -538,7 +585,14 @@ export default function ReportBuilderPage() {
               onTextChange={(next) => setTexts((prev) => ({ ...prev, reach: next }))}
               errorMessage={sectionErrors.reach}
             >
-              <ReachSection rows={trendRows} excel={excelParsed} />
+              <ReachSection
+                rows={trendRows}
+                excel={excelParsed}
+                prevFeedPosts={prevPosts.feed}
+                prevReelPosts={prevPosts.reel}
+                prevMonth={prevPosts.month}
+                prevFound={prevPosts.found}
+              />
             </SectionCard>
 
             <SectionCard

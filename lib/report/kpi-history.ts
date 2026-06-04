@@ -102,6 +102,16 @@ export function monthIndex(yearMonth: string): number | null {
   return Number(m[1]) * 12 + Number(m[2]);
 }
 
+/** "2026/05" → "2026/04"、"2026/01" → "2025/12"。形式不正なら null */
+export function prevYearMonth(yearMonth: string): string | null {
+  const m = yearMonth.match(/^(\d{4})\/(0[1-9]|1[0-2])$/);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (mo === 1) return `${y - 1}/12`;
+  return `${y}/${String(mo - 1).padStart(2, "0")}`;
+}
+
 /**
  * 対象月（targetMonth）を終点に、そこから遡って monthsInclusive ヶ月分の範囲へ絞る。
  * - 対象月より未来の月は除外
