@@ -18,6 +18,7 @@ import {
   windowByTargetMonth,
   prevYearMonth,
 } from "@/lib/report/kpi-history";
+import { asStringMap, compactStringMap } from "@/lib/report/summary-metrics";
 
 // 推移グラフ・KPI推移表の表示範囲（対象月 + 過去12ヶ月 = 13ヶ月）
 const TREND_WINDOW_MONTHS = 13;
@@ -79,6 +80,15 @@ export default function ReportBuilderPage() {
     month: string | null;
     found: boolean;
   }>({ feed: [], reel: [], month: null, found: false });
+
+  // §1-3(4a6): サマリー指標テーブルの 目標 / 要因 / 次月対策
+  const [goals, setGoals] = useState<Record<string, string>>({});
+  const [factors, setFactors] = useState<Record<string, string>>({});
+  const [nextActions, setNextActions] = useState<Record<string, string>>({});
+  const [generatingMetrics, setGeneratingMetrics] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [metaMessage, setMetaMessage] = useState<string | null>(null);
+  const [metaError, setMetaError] = useState<string | null>(null);
 
   const [texts, setTexts] = useState<SectionTexts>(EMPTY_TEXTS);
   const [statuses, setStatuses] = useState<SectionStatuses>(EMPTY_STATUSES);
@@ -219,6 +229,16 @@ export default function ReportBuilderPage() {
     };
   }, [clientId, targetMonthSlash]);
 
+  // 対象月の保存済みメタ（目標 / 要因 / 次月対策）を読み込む。
+  // 保存後は historyPoints 更新で再読込され、保存値で一貫する。
+  useEffect(() => {
+    const saved = historyPoints.find((p) => p.year_month === targetMonthSlash);
+    const kpi = (saved?.kpi ?? {}) as Record<string, unknown>;
+    setGoals(asStringMap(kpi.goals));
+    setFactors(asStringMap(kpi.factors));
+    setNextActions(asStringMap(kpi.next_actions));
+  }, [clientId, targetMonthSlash, historyPoints]);
+
   const currentKpi: KpiSummary | null = useMemo(
     () => (excelParsed ? excelToKpiSummary(excelParsed) : null),
     [excelParsed]
@@ -345,7 +365,13 @@ export default function ReportBuilderPage() {
           client_id: clientId,
           year_month: targetMonthSlash,
           fmt_version: fv,
-          kpi_summary: currentKpi ?? {},
+          // 数値（currentKpi）＋ サマリーの目標/要因/次月対策をまとめて保存
+          kpi_summary: {
+            ...(currentKpi ?? {}),
+            goals: compactStringMap(goals),
+            factors: compactStringMap(factors),
+            next_actions: compactStringMap(nextActions),
+          },
           top_posts: excelParsed
             ? {
                 feed_ranking: excelParsed.feed_ranking,
@@ -422,6 +448,79 @@ export default function ReportBuilderPage() {
       setManualError(err instanceof Error ? err.message : "保存中にエラーが発生しました");
     } finally {
       setManualSaving(false);
+    }
+  }
+
+  // ------------------------------------------
+  // §3: 要因・次月対策のAI生成
+  // ------------------------------------------
+  async function handleGenerateMetrics() {
+    if (generatingMetrics || !clientId || !targetMonthSlash || !excelParsed) return;
+    setMetaError(null);
+    setMetaMessage(null);
+    setGeneratingMetrics(true);
+    try {
+      const res = await fetch("/api/report-builder/summary-metrics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: clientId,
+          year_month: targetMonthSlash,
+          excel_parsed: excelParsed,
+          operator_memo: operatorMemo,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "生成に失敗しました" }));
+        throw new Error(body.error ?? "生成に失敗しました");
+      }
+      const data = await res.json();
+      // 生成された指標キーだけ上書き（手入力済みの他キーは保持）
+      setFactors((prev) => ({ ...prev, ...(data.factors ?? {}) }));
+      setNextActions((prev) => ({ ...prev, ...(data.next_actions ?? {}) }));
+      setMetaMessage("要因・次月対策の下書きを生成しました（保存ボタンで保存）");
+    } catch (err) {
+      setMetaError(err instanceof Error ? err.message : "生成中にエラーが発生しました");
+    } finally {
+      setGeneratingMetrics(false);
+    }
+  }
+
+  // ------------------------------------------
+  // §2/§3: 目標・要因・次月対策の保存（kpi_summary へマージ）
+  // ------------------------------------------
+  async function handleSaveMeta() {
+    if (savingMeta || !clientId) return;
+    if (!targetMonthSlash) {
+      setMetaError("対象年月を指定してください");
+      return;
+    }
+    setMetaError(null);
+    setMetaMessage(null);
+    setSavingMeta(true);
+    try {
+      const res = await fetch("/api/report-builder/summary-meta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({
+          client_id: clientId,
+          year_month: targetMonthSlash,
+          goals: compactStringMap(goals),
+          factors: compactStringMap(factors),
+          next_actions: compactStringMap(nextActions),
+        }),
+      });
+      if (!res.ok) {
+        if (res.status === 401) clearAppPassword();
+        const body = await res.json().catch(() => ({ error: "保存に失敗しました" }));
+        throw new Error(body.error ?? "保存に失敗しました");
+      }
+      setMetaMessage("目標・要因・次月対策を保存しました");
+      await fetchHistory(clientId);
+    } catch (err) {
+      setMetaError(err instanceof Error ? err.message : "保存中にエラーが発生しました");
+    } finally {
+      setSavingMeta(false);
     }
   }
 
@@ -565,7 +664,26 @@ export default function ReportBuilderPage() {
               onTextChange={(next) => setTexts((prev) => ({ ...prev, summary: next }))}
               errorMessage={sectionErrors.summary}
             >
-              <SummarySection points={windowedPoints} targetMonth={targetMonthSlash} />
+              <SummarySection
+                points={windowedPoints}
+                targetMonth={targetMonthSlash}
+                meta={{
+                  goals,
+                  factors,
+                  nextActions,
+                  onGoalChange: (k, v) => setGoals((prev) => ({ ...prev, [k]: v })),
+                  onFactorChange: (k, v) => setFactors((prev) => ({ ...prev, [k]: v })),
+                  onNextActionChange: (k, v) =>
+                    setNextActions((prev) => ({ ...prev, [k]: v })),
+                  onGenerateMetrics: handleGenerateMetrics,
+                  generatingMetrics,
+                  onSaveMeta: handleSaveMeta,
+                  savingMeta,
+                  metaMessage,
+                  metaError,
+                  canGenerateMetrics: excelParsed !== null,
+                }}
+              />
             </SectionCard>
 
             <SectionCard
