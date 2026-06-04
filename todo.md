@@ -3,7 +3,17 @@
 ## 🔜 次回の再開ポイント（2026-06-04 時点）
 
 **現在地**: Phase 4a6 まで実装完了 → 全4セクションが FMT 準拠に揃った。ビルド/型/lint 検証済み。
-**4a2〜4a5 は push 済み（origin/main = `3c5490e`）。4a6 の2コミット（`89dbf37` 本体 / `0c596b9` セキュリティ修正）が未push** で、**川嶋さんの実機動作確認待ち**。
+**4a2〜4a6 + 生成API認可 + 本todo はすべて push 済み（origin/main = `7935c4b`）。未push なし。**
+残るは **川嶋さんの 4a6 ブラウザ実機確認のみ**（コードはマージ済み・自動チェックは全グリーン）。
+
+**4a6 で確認したい点**（`npm run dev` → `/admin/eval/report`）:
+- サマリー指標テーブルが6列（指標/目標/実績/前月比/要因/次月対策）になるか
+- 目標を入力→「目標・要因・対策を保存」→再読込で保持／目標だけ保存で考察・数値が壊れないか
+- 「要因・次月対策をAI生成」→下書き挿入→手編集→保存→再読込で保持
+- キョウワ 2026/05 で 4a4（日別折れ線・先月比表）/ 4a5（リーチ比較表）も合わせて確認
+- ※ 生成系API（generate-section / summary-metrics）に認可を付けたため、初回生成時に APP_PASSWORD 入力プロンプトが出る
+
+**次にやること**: 上記確認で問題なければ **Phase 4b**（AI Pro/Notion風デザイン・男女別年齢ピラミッド）/ Step 9 デプロイ / Step 10 過去データ投入 へ。
 
 **全4セクションの FMT 準拠状況**:
 - 【1】サマリー … 4a6（指標/目標/実績/前月比/要因/次月対策の5列。目標=手入力、要因/次月対策=AI生成+手編集）
@@ -16,16 +26,6 @@
 - `/admin`（クライアント編集モーダル） = **初期セットアップ**（複数月Excel一括取り込み + 確認表セル手打ち補完 + 登録済み月次一覧編集）
 - `/admin/eval/report` = レポート作成本体（当月Excel → グラフ/テーブル自動 + AI考察 → 保存）
 
-次回はここから:
-1. **4a6 のブラウザ通し確認**（`npm run dev` → `/admin/eval/report`）
-   - サマリー指標テーブルが6列（指標/目標/実績/前月比/要因/次月対策）になるか
-   - 目標を入力→「目標・要因・対策を保存」→再読込で保持／目標だけ保存で考察・数値が壊れないか
-   - 「要因・次月対策をAI生成」→下書き挿入→手編集→保存→再読込で保持
-   - キョウワ 2026/05 で 4a4（日別折れ線・先月比表）/ 4a5（リーチ比較表）も合わせて確認
-2. **OK なら push**（`89dbf37` + `0c596b9`）→「pushして」でOK
-3. **要対応（要判断）**: `generate-section`（4セクション考察生成）も Gemini 課金を伴うのに未認可。`summary-metrics`（4a6で認可済み）と同様に `isAuthorized` ゲートを付けるか要判断（クライアント側 `handleGenerate` への `authHeaders()` 付与もセット）。本番 `/api/generate-report` の扱いも合わせて検討
-4. その後は **Phase 4b**（デザイン作り込み・年齢ピラミッド）/ Step 9 デプロイ / Step 10 過去データ投入
-
 実装詳細は「リリースノート > 2026-06-04 Phase 4a2〜4a6」を参照。
 
 ---
@@ -33,7 +33,7 @@
 ## 直近のリリースノート（2026-05-21 〜 2026-06-04）
 
 ### 2026-06-04 — Phase 4a2〜4a6: レポート構造をFMT準拠に揃える
-Phase 4a の基盤の上に、重複防止・初期セットアップ動線・全4セクションのFMT準拠化を順次実装。各フェーズはビルド/型/lint 検証済み。4a2〜4a5 は push 済み、4a6 は push 待ち（実機確認後）。
+Phase 4a の基盤の上に、重複防止・初期セットアップ動線・全4セクションのFMT準拠化を順次実装。各フェーズはビルド/型/lint 検証済み。**4a2〜4a6 + 生成API認可まで origin/main（`7935c4b`）に push 済み**。残りは川嶋さんの 4a6 ブラウザ実機確認のみ。
 
 **Phase 4a2 — 重複防止 upsert + 初期セットアップ動線**（コミット `ba77d05`・push済）
 - **核心**: `lib/report/knowledge-upsert.ts`（新規）を全保存経路の共通入口に。`client_id × year_month` をキーに「渡されたフィールドだけ上書き・未指定は既存保持」のマージ upsert。`kpi_summary` はキー単位マージ、`report_text`/`top_posts`/`excel_parsed` は非空時のみ上書き、`fmt_version` はレポート本文を伴う保存時のみ更新。同一月の重複レコードは最新を基準に1件へ収束（残り削除）
@@ -59,7 +59,7 @@ Phase 4a の基盤の上に、重複防止・初期セットアップ動線・�
 - `SummarySection` の当月実績テーブルを 指標/目標/実績/前月比/要因/次月対策 に拡張。`lib/report/summary-metrics.ts`（新規・指標定義 + goals/factors/next_actions 正規化）
 - §2 目標=手入力。`app/api/report-builder/summary-meta`（新規）で `kpi_summary.goals/factors/next_actions` のみマージ upsert（report_text を渡さず本文・数値・デモグラ・fmt_version を保持）
 - §3 要因/次月対策=AI生成+手編集。`app/api/report-builder/summary-metrics`（新規・指標別に `{factor, next_action}` を JSON 生成。当月数値/前月比/属性/運用メモを文脈に）。narrative な総括考察は従来の generate-section のまま。レポート保存時にも目標/要因/次月対策を kpi_summary に同梱
-- **セキュリティ修正（`0c596b9`）**: 自動レビュー指摘により `summary-metrics`（Gemini課金）に `isAuthorized` を追加、クライアント呼び出しに `authHeaders()`+401処理。※ `generate-section` も同種の未認可 → 次回判断（再開ポイント3参照）
+- **セキュリティ修正**: Gemini課金を伴う生成APIに認可を統一。`summary-metrics`（`0c596b9`）+ `generate-section`（`7935c4b`）に `isAuthorized` を追加し、クライアント呼び出しに `authHeaders()`+401処理（初回生成時にAPP_PASSWORD入力）。本番 `/api/generate-report` は「触らない」方針のため対象外（デプロイ前に別途判断）
 
 ### Phase 3.6 — 検証側の参照ロジック「過去レポ1件＋表現ナレッジ1件」化
 従来「同社過去6件＋他社ランダム4件 = 計10件」だった検証側の参照を、トークン削減目的で「直前月の正解レポート1件＋`best_practices` 1件 = 計2件」に変更。本番 `/api/generate-report` は無変更。
@@ -467,13 +467,14 @@ Excel に当月分のみが入る運用に変わったため、前月比は前�
 
 ## 未着手
 
-- [ ] Phase 4a6-検収: 実機動作確認 + push（川嶋）
-  - 手順は冒頭「🔜 次回の再開ポイント」参照（サマリー6列テーブル・目標保存・要因/次月対策AI生成）
-  - 確認OK後に `git push` で未push2コミット（`89dbf37` + `0c596b9`）を `origin/main` へ
-  - 4a2〜4a5 はpush済み（origin/main=`3c5490e`）
-- [ ] 要判断: `generate-section` の認可（セキュリティ）
-  - 4セクション考察生成も Gemini 課金を伴うが未認可（`summary-metrics` は4a6で認可済み）
-  - `isAuthorized` ゲート + クライアント `handleGenerate` への `authHeaders()` 付与を行うか、本番 `/api/generate-report` の扱いと合わせて判断
+- [ ] Phase 4a6-検収: ブラウザ実機動作確認（川嶋）
+  - コードは push 済み（origin/main=`7935c4b`）。確認項目は冒頭「🔜 次回の再開ポイント」参照
+  - サマリー6列テーブル・目標保存・要因/次月対策AI生成 + 4a4/4a5 の表示
+  - ※ 生成系API認可済みのため初回生成で APP_PASSWORD 入力が必要
+  - 問題が見つかれば修正、無ければ Phase 4b へ
+- [x] `generate-section` / `summary-metrics` の認可（セキュリティ・2026-06-04 完了）
+  - Gemini課金を伴う生成APIに `isAuthorized` + クライアント `authHeaders()`+401 を付与
+  - 本番 `/api/generate-report` はデプロイ前（Step 9）に別途判断
 - [ ] Phase 4b: デザイン作り込み + 特殊グラフ（7月予定）
   - AI Pro/Notion風の見た目調整
   - 男女別年齢ピラミッド
