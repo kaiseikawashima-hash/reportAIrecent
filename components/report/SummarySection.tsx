@@ -44,7 +44,8 @@ export default function SummarySection({
         <p className="text-xs font-medium text-gray-700 mb-2">
           KPI推移表（直近1年・蓄積月のみ）
         </p>
-        <KpiHistoryTable points={points} months={12} />
+        {/* points は対象月起点の直近13ヶ月へ絞り込み済み。全範囲を表示する */}
+        <KpiHistoryTable points={points} months={13} />
       </div>
 
       {current && (

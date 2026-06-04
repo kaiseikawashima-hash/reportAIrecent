@@ -22,6 +22,8 @@ export default function KnowledgePage() {
   const [bestPractices, setBestPractices] = useState<BestPractice[]>([]);
   const [filterClient, setFilterClient] = useState("");
   const [filterMonth, setFilterMonth] = useState("");
+  // §B: レポート本文の有無フィルタ（デフォルトは「レポートあり」で一覧をスッキリさせる）
+  const [reportFilter, setReportFilter] = useState<"with_report" | "all">("with_report");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
@@ -118,11 +120,26 @@ export default function KnowledgePage() {
     bestPractices.map((bp) => [bp.knowledge_base_id, bp])
   );
 
+  const hasReportText = (r: KnowledgeBase): boolean =>
+    typeof r.report_text === "string" && r.report_text.trim().length > 0;
+
   const filtered = records.filter((r) => {
     if (filterClient && r.client_id !== filterClient) return false;
     if (filterMonth && !r.year_month.includes(filterMonth)) return false;
+    // 「レポートあり」では数値のみレコード（report_text 空）を隠す
+    if (reportFilter === "with_report" && !hasReportText(r)) return false;
     return true;
   });
+
+  // 「すべて表示」時に隠れている数値のみレコード件数（導線表示用）
+  const hiddenNumericOnly =
+    reportFilter === "with_report"
+      ? records.filter((r) => {
+          if (filterClient && r.client_id !== filterClient) return false;
+          if (filterMonth && !r.year_month.includes(filterMonth)) return false;
+          return !hasReportText(r);
+        }).length
+      : 0;
 
   return (
     <main className="min-h-screen bg-gray-50">
@@ -149,7 +166,7 @@ export default function KnowledgePage() {
       <div className="max-w-4xl mx-auto py-8 px-4">
         <div className="bg-white rounded-xl shadow-sm border p-6">
           {/* フィルタ */}
-          <div className="flex gap-4 mb-6">
+          <div className="flex gap-4 mb-2 flex-wrap items-center">
             <select
               value={filterClient}
               onChange={(e) => setFilterClient(e.target.value)}
@@ -167,10 +184,44 @@ export default function KnowledgePage() {
               onChange={(e) => setFilterMonth(e.target.value)}
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
             />
+            {/* §B: 表示フィルタ（レポートあり / すべて表示） */}
+            <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden text-sm">
+              <button
+                type="button"
+                onClick={() => setReportFilter("with_report")}
+                className={`px-3 py-2 ${
+                  reportFilter === "with_report"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                レポートあり
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportFilter("all")}
+                className={`px-3 py-2 border-l border-gray-300 ${
+                  reportFilter === "all"
+                    ? "bg-blue-600 text-white"
+                    : "bg-white text-gray-600 hover:bg-gray-50"
+                }`}
+              >
+                すべて表示
+              </button>
+            </div>
             <span className="text-sm text-gray-500 self-center">
               {filtered.length}件
             </span>
           </div>
+          <p className="text-xs text-gray-400 mb-6">
+            {reportFilter === "with_report"
+              ? `考察テキストのあるレポートのみ表示中${
+                  hiddenNumericOnly > 0
+                    ? `（数値のみレコード ${hiddenNumericOnly}件は非表示。推移グラフのデータ源として保持されています）`
+                    : ""
+                }`
+              : "数値のみレコード（推移グラフ用）も含めて表示中"}
+          </p>
 
           {/* レコード一覧 */}
           <div className="space-y-3">
@@ -178,16 +229,33 @@ export default function KnowledgePage() {
               const isBest = bestPracticeMap.has(r.id);
               const isBusy = busyId === r.id;
               const clientName = clientMap.get(r.client_id ?? "") ?? "不明";
+              const isNumericOnly = !hasReportText(r);
               return (
-                <div key={r.id} className="border rounded-lg">
+                <div
+                  key={r.id}
+                  className={`border rounded-lg ${
+                    isNumericOnly ? "bg-gray-50/60 border-dashed" : ""
+                  }`}
+                >
                   <div className="flex items-center justify-between px-4 py-3">
                     <button
                       onClick={() => setExpandedId(expandedId === r.id ? null : r.id)}
                       className="flex-1 flex items-center gap-4 text-left hover:bg-gray-50 -mx-4 -my-3 px-4 py-3 rounded-lg"
                     >
-                      <span className="font-medium text-sm">{clientName}</span>
+                      <span
+                        className={`font-medium text-sm ${
+                          isNumericOnly ? "text-gray-500" : ""
+                        }`}
+                      >
+                        {clientName}
+                      </span>
                       <span className="text-sm text-gray-600">{r.year_month}</span>
                       <span className="text-xs text-gray-400">FMT v{r.fmt_version}</span>
+                      {isNumericOnly && (
+                        <span className="text-[10px] px-2 py-0.5 bg-gray-200 text-gray-600 rounded">
+                          数値のみ
+                        </span>
+                      )}
                       {isBest && (
                         <span className="text-xs px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded">
                           ★ ベストプラクティス

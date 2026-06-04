@@ -95,6 +95,35 @@ export function lastNMonths(
   return points.slice(-n);
 }
 
+/** "YYYY/MM" を月通し番号（year*12 + month）に変換。形式不正なら null */
+export function monthIndex(yearMonth: string): number | null {
+  const m = yearMonth.match(/^(\d{4})\/(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 12 + Number(m[2]);
+}
+
+/**
+ * 対象月（targetMonth）を終点に、そこから遡って monthsInclusive ヶ月分の範囲へ絞る。
+ * - 対象月より未来の月は除外
+ * - 範囲内でも knowledge_base に存在する月だけを残す（欠月は枠を作らない）
+ * - targetMonth が "YYYY/MM" でない場合は窓化せず元の配列を返す（フォールバック）
+ *
+ * 例: targetMonth="2026/05", monthsInclusive=13 → 2025/06〜2026/05 の存在月のみ
+ */
+export function windowByTargetMonth(
+  points: KpiHistoryPoint[],
+  targetMonth: string,
+  monthsInclusive = 13
+): KpiHistoryPoint[] {
+  const end = monthIndex(targetMonth);
+  if (end === null) return points;
+  const start = end - (monthsInclusive - 1);
+  return points.filter((p) => {
+    const idx = monthIndex(p.year_month);
+    return idx !== null && idx >= start && idx <= end;
+  });
+}
+
 /**
  * フォロワー純増（当月 − 前月）を月ごとに計算する。
  * 前月の値が履歴に無い月は null（既知の課題: kpi_summary 上の

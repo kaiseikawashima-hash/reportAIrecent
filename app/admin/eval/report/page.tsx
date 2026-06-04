@@ -13,7 +13,10 @@ import { excelToKpiSummary } from "@/lib/excel-to-kpi";
 import { SECTION_LABELS, type EvalSection } from "@/lib/eval/types";
 import type { KpiHistoryPoint } from "@/lib/report/types";
 import { TREND_KPI_KEYS } from "@/lib/report/types";
-import { buildTrendRows } from "@/lib/report/kpi-history";
+import { buildTrendRows, windowByTargetMonth } from "@/lib/report/kpi-history";
+
+// 推移グラフ・KPI推移表の表示範囲（対象月 + 過去12ヶ月 = 13ヶ月）
+const TREND_WINDOW_MONTHS = 13;
 import SectionCard, { type SectionGenStatus } from "@/components/report/SectionCard";
 import SummarySection from "@/components/report/SummarySection";
 import FollowerSection from "@/components/report/FollowerSection";
@@ -186,9 +189,16 @@ export default function ReportBuilderPage() {
     return merged.sort((a, b) => a.year_month.localeCompare(b.year_month));
   }, [historyPoints, currentKpi, targetMonthSlash]);
 
+  // §A: 対象月を終点に直近13ヶ月へ絞る（範囲内の存在月のみ・欠月スキップ）。
+  // 対象月の前月行も範囲内に含まれるため、各指標テーブルの前月比は従来通り。
+  const windowedPoints = useMemo(
+    () => windowByTargetMonth(displayPoints, targetMonthSlash, TREND_WINDOW_MONTHS),
+    [displayPoints, targetMonthSlash]
+  );
+
   const trendRows = useMemo(
-    () => buildTrendRows(displayPoints, [...TREND_KPI_KEYS]),
-    [displayPoints]
+    () => buildTrendRows(windowedPoints, [...TREND_KPI_KEYS]),
+    [windowedPoints]
   );
 
   // ------------------------------------------
@@ -502,7 +512,7 @@ export default function ReportBuilderPage() {
               onTextChange={(next) => setTexts((prev) => ({ ...prev, summary: next }))}
               errorMessage={sectionErrors.summary}
             >
-              <SummarySection points={displayPoints} targetMonth={targetMonthSlash} />
+              <SummarySection points={windowedPoints} targetMonth={targetMonthSlash} />
             </SectionCard>
 
             <SectionCard
